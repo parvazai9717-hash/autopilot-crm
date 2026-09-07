@@ -1,0 +1,646 @@
+{
+  "info": {
+    "_postman_id": "7bf394e1-2a67-4e9a-9b48-89c02d7350cb",
+    "name": "Meeting → Action Autopilot CRM",
+    "description": "Complete Postman collection for Meeting → Action Autopilot CRM covering machine endpoints (v1), human authentication, review screens, dashboards, and admin management.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:8000",
+      "type": "string"
+    },
+    {
+      "key": "api_key",
+      "value": "test-api-key",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication (Sanctum SPA)",
+      "item": [
+        {
+          "name": "Get CSRF Cookie",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/sanctum/csrf-cookie",
+              "host": ["{{base_url}}"],
+              "path": ["sanctum", "csrf-cookie"]
+            }
+          }
+        },
+        {
+          "name": "Login (Admin)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"admin@test.com\",\n  \"password\": \"password123\",\n  \"remember\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/auth/login",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "login"]
+            }
+          }
+        },
+        {
+          "name": "Get Current User (Me)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/me",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "me"]
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/auth/logout",
+              "host": ["{{base_url}}"],
+              "path": ["api", "auth", "logout"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Machine API (v1 / n8n Integration)",
+      "item": [
+        {
+          "name": "Health Check Ping",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/ping",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "ping"]
+            }
+          }
+        },
+        {
+          "name": "Get Users Roster",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/users?status=active",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "users"],
+              "query": [{ "key": "status", "value": "active" }]
+            }
+          }
+        },
+        {
+          "name": "Get Organization Settings",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/orgs/1/settings",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "orgs", "1", "settings"]
+            }
+          }
+        },
+        {
+          "name": "Create Text Meeting",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"org_id\": 1,\n  \"title\": \"Weekly Engineering Standup\",\n  \"meeting_date\": \"2026-09-06\",\n  \"timezone\": \"Asia/Karachi\",\n  \"transcript\": \"Ahmed will prepare the proposal by Friday. Sarah will contact the supplier tomorrow.\",\n  \"created_by\": 6\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/meetings",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "meetings"]
+            }
+          }
+        },
+        {
+          "name": "Upload Meeting Recording",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "file", "type": "file", "src": "" },
+                { "key": "org_id", "value": "1", "type": "text" },
+                { "key": "title", "value": "Product Operations Sync", "type": "text" },
+                { "key": "meeting_date", "value": "2026-09-06", "type": "text" },
+                { "key": "timezone", "value": "Asia/Karachi", "type": "text" },
+                { "key": "created_by", "value": "6", "type": "text" }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/meetings/upload",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "meetings", "upload"]
+            }
+          }
+        },
+        {
+          "name": "Update Meeting (Status & Transcript)",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"org_id\": 1,\n  \"status\": \"extracted\",\n  \"transcript\": \"Meeting transcript processed by Whisper...\",\n  \"summary\": \"Executive summary of the discussion.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/meetings/1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "meetings", "1"]
+            }
+          }
+        },
+        {
+          "name": "Retry Failed Meeting",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"org_id\": 1\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/meetings/1/retry",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "meetings", "1", "retry"]
+            }
+          }
+        },
+        {
+          "name": "Ingest Action Items",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"org_id\": 1,\n  \"meeting_id\": 1,\n  \"tasks\": [\n    {\n      \"title\": \"Prepare ABC proposal\",\n      \"description\": \"Draft proposal for review\",\n      \"owner_name_raw\": \"Ahmed\",\n      \"owner_id\": 1,\n      \"owner_ambiguous\": false,\n      \"priority\": \"high\",\n      \"due_date\": \"2026-09-11\",\n      \"deadline_phrase\": \"by Friday\",\n      \"source_text\": \"Ahmed, please prepare the ABC proposal by Friday.\",\n      \"owner_confidence\": 0.95,\n      \"deadline_confidence\": 0.9,\n      \"action_confidence\": 0.98\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/action-items",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "action-items"]
+            }
+          }
+        },
+        {
+          "name": "List Tasks",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/v1/tasks?status=in_progress",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tasks"],
+              "query": [{ "key": "status", "value": "in_progress" }]
+            }
+          }
+        },
+        {
+          "name": "Task Escalation Hook",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"org_id\": 1,\n  \"escalation_level\": 1,\n  \"recipient_role\": \"manager\",\n  \"recipient_email\": \"bilal@test.com\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/tasks/1/escalation",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "tasks", "1", "escalation"]
+            }
+          }
+        },
+        {
+          "name": "Append Task Event",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "X-API-Key", "value": "{{api_key}}" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"task_id\": 1,\n  \"event_type\": \"REMINDER_SENT\",\n  \"actor_type\": \"ai\",\n  \"metadata\": {\n    \"channel\": \"email\",\n    \"recipient\": \"ahmed@test.com\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/task-events",
+              "host": ["{{base_url}}"],
+              "path": ["api", "v1", "task-events"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Review Screen (Approvers)",
+      "item": [
+        {
+          "name": "Get Meeting Review Data",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/meetings/1/review",
+              "host": ["{{base_url}}"],
+              "path": ["api", "meetings", "1", "review"]
+            }
+          }
+        },
+        {
+          "name": "Update Extracted Task",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Prepare ABC proposal - Final Version\",\n  \"owner_id\": 1,\n  \"due_date\": \"2026-09-15\",\n  \"priority\": \"high\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/tasks/1",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "1"]
+            }
+          }
+        },
+        {
+          "name": "Approve Single Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/1/approve",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "1", "approve"]
+            }
+          }
+        },
+        {
+          "name": "Reject Single Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/tasks/1/reject",
+              "host": ["{{base_url}}"],
+              "path": ["api", "tasks", "1", "reject"]
+            }
+          }
+        },
+        {
+          "name": "Approve All Tasks",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/meetings/1/approve-all",
+              "host": ["{{base_url}}"],
+              "path": ["api", "meetings", "1", "approve-all"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Employee (My Tasks)",
+      "item": [
+        {
+          "name": "Get My Tasks",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/my-tasks",
+              "host": ["{{base_url}}"],
+              "path": ["api", "my-tasks"]
+            }
+          }
+        },
+        {
+          "name": "Start Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/my-tasks/1/start",
+              "host": ["{{base_url}}"],
+              "path": ["api", "my-tasks", "1", "start"]
+            }
+          }
+        },
+        {
+          "name": "Complete Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/my-tasks/1/complete",
+              "host": ["{{base_url}}"],
+              "path": ["api", "my-tasks", "1", "complete"]
+            }
+          }
+        },
+        {
+          "name": "Block Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason_code\": \"waiting_for_info\",\n  \"description\": \"Waiting on vendor pricing sheet\",\n  \"depends_on_task_id\": null\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/my-tasks/1/block",
+              "host": ["{{base_url}}"],
+              "path": ["api", "my-tasks", "1", "block"]
+            }
+          }
+        },
+        {
+          "name": "Unblock Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/my-tasks/1/unblock",
+              "host": ["{{base_url}}"],
+              "path": ["api", "my-tasks", "1", "unblock"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. Manager Dashboard",
+      "item": [
+        {
+          "name": "Get Manager Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/manager/dashboard",
+              "host": ["{{base_url}}"],
+              "path": ["api", "manager", "dashboard"]
+            }
+          }
+        },
+        {
+          "name": "Reassign Task",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"owner_id\": 2\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/manager/tasks/1/reassign",
+              "host": ["{{base_url}}"],
+              "path": ["api", "manager", "tasks", "1", "reassign"]
+            }
+          }
+        },
+        {
+          "name": "Resolve Blocker",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/manager/tasks/1/resolve-blocker",
+              "host": ["{{base_url}}"],
+              "path": ["api", "manager", "tasks", "1", "resolve-blocker"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Executive Dashboard",
+      "item": [
+        {
+          "name": "Get Executive Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/executive/dashboard",
+              "host": ["{{base_url}}"],
+              "path": ["api", "executive", "dashboard"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Admin Center",
+      "item": [
+        {
+          "name": "Get Users",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/users",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "users"]
+            }
+          }
+        },
+        {
+          "name": "Create User",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Hassan Ali\",\n  \"email\": \"hassan@test.com\",\n  \"password\": \"password123\",\n  \"role\": \"employee\",\n  \"manager_id\": 5,\n  \"status\": \"active\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/users",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "users"]
+            }
+          }
+        },
+        {
+          "name": "Get Organization Settings",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/settings",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "settings"]
+            }
+          }
+        },
+        {
+          "name": "Update Organization Settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Demo Company\",\n  \"timezone\": \"Asia/Karachi\",\n  \"settings\": {\n    \"reminder_windows_days\": {\n      \"high\": [3, 2, 1, 0],\n      \"medium\": [2, 1, 0],\n      \"low\": [1, 0]\n    },\n    \"escalation_days_overdue\": {\n      \"high\": { \"manager\": 2, \"executive\": 5 },\n      \"medium\": { \"manager\": 4, \"executive\": 8 },\n      \"low\": { \"manager\": 7, \"executive\": 14 }\n    },\n    \"working_hours\": { \"start\": \"09:00\", \"end\": \"18:00\" },\n    \"working_days\": [1, 2, 3, 4, 5],\n    \"notification_channels\": [\"email\"]\n  }\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/admin/settings",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "settings"]
+            }
+          }
+        },
+        {
+          "name": "Regenerate Machine API Key",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/api-key/regenerate",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "api-key", "regenerate"]
+            }
+          }
+        },
+        {
+          "name": "Get Webhook Delivery Log",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/webhooks?limit=50",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "webhooks"],
+              "query": [{ "key": "limit", "value": "50" }]
+            }
+          }
+        },
+        {
+          "name": "Resend Webhook Delivery",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" }
+            ],
+            "url": {
+              "raw": "{{base_url}}/api/admin/webhooks/1/resend",
+              "host": ["{{base_url}}"],
+              "path": ["api", "admin", "webhooks", "1", "resend"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

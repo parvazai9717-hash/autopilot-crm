@@ -1,0 +1,389 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Models\Meeting;
+use App\Models\Organization;
+use App\Models\Task;
+use App\Models\TaskEvent;
+use App\Models\User;
+use Carbon\Carbon;
+use Tests\TestCase;
+
+class MachineApiTest extends TestCase
+{
+    protected string $apiKey = 'test-n8n-api-key-secret-2026';
+
+    protected function headers(): array
+    {
+        return [
+            'X-API-Key' => $this->apiKey,
+        ];
+    }
+
+    public function test_get_users_returns_correct_roster_shape(): void
+    {
+        $response = $this->withHeaders($this->headers())
+            ->getJson('/api/v1/users?org_id=1');
+
+        $response->assertStatus(200)
+            ->assertJsonStructure([
+                '*' => [
+                    'id',
+                    'name',
+                    'email',
+                    'manager_id',
+                    'manager_name',
+                    'manager_email',
+                ],
+            ]);
+
+        // Find Ahmed Raza in response
+        $users = $response->json();
+        $ahmed = collect($users)->firstWhere('email', 'ahmed@test.com');
+        $this->assertNotNull($ahmed);
+        $this->assertEquals('Ahmed Raza', $ahmed['name']);
+        $this->assertEquals(5, $ahmed['manager_id']);
+        $this->assertEquals('Bilal Sheikh', $ahmed['manager_name']);
+        $this->assertEquals('bilal@test.com', $ahmed['manager_email']);
+    }
+
+    public function test_get_users_without_org_id_returns_422(): void
+    {
+        $response = $this->withHeaders($this->headers())
+            ->getJson('/api/v1/users');
+
+        $response->assertStatus(422)
+            ->assertJsonPath('error.code', 'VALIDATION_ERROR')
+            ->assertJsonPath('error.field', 'org_id');
+    }
+
+    public function test_get_org_settings_returns_settings_json(): void
+    {
+        $response = $this->withHeaders($this->headers())
+            ->getJson('/api/v1/orgs/1/settings');
+
+        $response->assertStatus(200)
+            ->assertJsonStructure([
+                'reminder_windows_days' => ['high', 'medium', 'low'],
+                'escalation_days_overdue' => [
+                    'high' => ['manager', 'executive'],
+                    'medium' => ['manager', 'executive'],
+                    'low' => ['manager', 'executive'],
+                ],
+                'working_hours' => ['start', 'end'],
+                'working_days',
+                'notification_channels',
+            ]);
+    }
+
+    public function test_get_org_settings_returns_404_for_invalid_org(): void
+    {
+        $response = $this->withHeaders($this->headers())
+            ->getJson('/api/v1/orgs/9999/settings');
+
+        $response->assertStatus(404)
+            ->assertJsonPath('error.code', 'NOT_FOUND');
+    }
+
+    public function test_post_meetings_creates_meeting_record(): void
+    {
+        $response = $this->withHeaders($this->headers())
+            ->postJson('/api/v1/meetings', [
+                'org_id' => 1,
+                'title' => 'Weekly Sync Meeting',
+                'date' => '2026-09-01',
+                'transcript' => 'Meeting transcript content goes here.',
+                'summary' => 'Meeting summary goes here.',
+            ]);
+
+        $response->assertStatus(201)
+            ->assertJsonStructure(['meeting_id']);
+
+        $meetingId = $response->json('meeting_id');
+        $this->assertDatabaseHas('meetings', [
+            'id' => $meetingId,
+            'title' => 'Weekly Sync Meeting',
+            'status' => 'processing',
+        ]);
+    }
+
+    public function test_patch_meetings_updates_transcript_and_summary(): void
+    {
+        $meeting = Meeting::withoutGlobalScopes()->where('org_id', 1)->first();
+
+        $response = $this->withHeaders($this->headers())
+            ->patchJson("/api/v1/meetings/{$meeting->id}", [
+                'org_id'     => 1,
+                'transcript' => 'Updated transcript from Whisper transcription.',
+                'summary'    => 'Updated summary of meeting action items.',
+                'status'     => 'processing',
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJson(['ok' => true]);
+
+        $this->assertDatabaseHas('meetings', [
+            'id'         => $meeting->id,
+            'transcript' => 'Updated transcript from Whisper transcription.',
+        ]);
+    }
+
+    public function test_post_action_items_ingests_tasks_and_creates_events(): void
+    {
+        $meeting = Meeting::withoutGlobalScopes()->create([
+            'org_id' => 1,
+            'title' => 'Extraction Test Meeting',
+            'meeting_date' => '2026-09-01',
+            'timezone' => 'Asia/Karachi',
+            'source' => 'text',
+            'status' => 'processing',
+            'created_by' => 1,
+        ]);
+
+        $payload = [
+            'org_id' => 1,
+            'meeting_id' => $meeting->id,
+            'transcript' => 'Raw meeting transcript generated by whisper.',
+            'summary' => 'Meeting summary generated by AI.',
+            'action_items' => [
+                [
+                    'title' => 'Prepare ABC proposal',
+
+                    'description' => 'Prepare the ABC proposal',
+                    'owner_id' => 'u_1',
+                    'owner_name_raw' => 'Ahmed Raza',
+                    'owner_ambiguous' => false,
+                    'due_date' => '2026-09-04',
+                    'deadline_phrase' => 'by Friday',
+                    'priority' => 'high',
+                    'conditional' => false,
+                    'source_text' => 'Ahmed, please prepare the ABC proposal by Friday.',
+                    'action_confidence' => 1,
+                    'owner_confidence' => 1,
+                    'deadline_confidence' => 0.85,
+                    'status' => 'pending_approval',
+                ],
+                [
+                    'title' => 'Send financial report',
+                    'description' => 'Send financial report by next Monday',
+                    'owner_id' => null,
+                    'owner_name_raw' => 'Ali',
+                    'owner_ambiguous' => true,
+                    'due_date' => '2026-09-07',
+                    'deadline_phrase' => 'by next Monday',
+                    'priority' => 'high',
+                    'conditional' => false,
+                    'source_text' => 'Ali will send me the financial report by next Monday.',
+                    'action_confidence' => 1,
+                    'owner_confidence' => 0.5,
+                    'deadline_confidence' => 0.9,
+                    'status' => 'pending_approval',
+                ],
+            ],
+        ];
+
+        $response = $this->withHeaders($this->headers())
+            ->postJson('/api/v1/action-items', $payload);
+
+        $response->assertStatus(201)
+            ->assertJson([
+                'created' => 2,
+            ])
+            ->assertJsonStructure(['created', 'task_ids']);
+
+        $taskIds = $response->json('task_ids');
+        $this->assertCount(2, $taskIds);
+
+        // Check meeting status is updated to extracted and transcript/summary are persisted
+        $meeting->refresh();
+        $this->assertEquals('extracted', $meeting->status);
+        $this->assertEquals('Raw meeting transcript generated by whisper.', $meeting->transcript);
+        $this->assertEquals('Meeting summary generated by AI.', $meeting->summary);
+
+
+        // Check AI_DETECTED events were logged
+        $this->assertDatabaseHas('task_events', [
+            'task_id' => $taskIds[0],
+            'event_type' => 'AI_DETECTED',
+            'actor_type' => 'ai',
+        ]);
+    }
+
+    public function test_get_tasks_returns_exact_spec_response_shape(): void
+    {
+        $response = $this->withHeaders($this->headers())
+            ->getJson('/api/v1/tasks?org_id=1');
+
+        $response->assertStatus(200)
+            ->assertJsonStructure([
+                'data' => [
+                    '*' => [
+                        'id',
+                        'title',
+                        'owner_id',
+                        'owner_name',
+                        'owner_email',
+                        'manager_id',
+                        'manager_name',
+                        'manager_email',
+                        'due_date',
+                        'priority',
+                        'status',
+                        'last_reminder_at',
+                        'escalation_level',
+                    ],
+                ],
+                'meta' => [
+                    'page',
+                    'per_page',
+                    'total',
+                ],
+            ]);
+    }
+
+    public function test_get_tasks_filtering_and_pagination(): void
+    {
+        $response = $this->withHeaders($this->headers())
+            ->getJson('/api/v1/tasks?org_id=1&status=pending_approval&page=1&per_page=2');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('meta.page', 1)
+            ->assertJsonPath('meta.per_page', 2);
+
+        $tasks = $response->json('data');
+        $this->assertLessThanOrEqual(2, count($tasks));
+        foreach ($tasks as $task) {
+            $this->assertEquals('pending_approval', $task['status']);
+        }
+    }
+
+    public function test_post_task_events_records_event_and_updates_reminder_date(): void
+    {
+        $task = Task::withoutGlobalScopes()->first();
+
+        $response = $this->withHeaders($this->headers())
+            ->postJson('/api/v1/task-events', [
+                'task_id' => $task->id,
+                'event_type' => 'REMINDER_SENT',
+                'actor_type' => 'system',
+                'channel' => 'email',
+                'metadata' => [
+                    'recipient' => 'ahmed@test.com',
+                ],
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJson(['ok' => true]);
+
+        // Verify task last_reminder_at was updated to today
+        $task->refresh();
+        $this->assertEquals(Carbon::now('Asia/Karachi')->toDateString(), $task->last_reminder_at?->format('Y-m-d'));
+
+        // Verify event logged
+        $this->assertDatabaseHas('task_events', [
+            'task_id' => $task->id,
+            'event_type' => 'REMINDER_SENT',
+        ]);
+    }
+
+    public function test_post_task_escalation_updates_level_and_logs_event(): void
+    {
+        $task = Task::withoutGlobalScopes()->where('org_id', 1)->first();
+
+        $response = $this->withHeaders($this->headers())
+            ->postJson("/api/v1/tasks/{$task->id}/escalation", [
+                'org_id'          => 1,
+                'escalation_level' => 2,
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJson(['ok' => true]);
+
+        $task->refresh();
+        $this->assertEquals(2, $task->escalation_level);
+
+        $this->assertDatabaseHas('task_events', [
+            'task_id'    => $task->id,
+            'event_type' => 'ESCALATED',
+        ]);
+    }
+
+    // ---------------------------------------------------------------
+    // Cross-tenant isolation tests
+    // ---------------------------------------------------------------
+
+    public function test_patch_meeting_with_wrong_org_id_returns_404(): void
+    {
+        // Meeting belongs to org 1; we send org_id 2 — must get 404, not 403,
+        // so the real tenant's record existence is never confirmed.
+        $org2 = Organization::factory()->create();
+        $meeting = Meeting::withoutGlobalScopes()->where('org_id', 1)->first();
+
+        $response = $this->withHeaders($this->headers())
+            ->patchJson("/api/v1/meetings/{$meeting->id}", [
+                'org_id'     => $org2->id,
+                'transcript' => 'Should not update.',
+            ]);
+
+        $response->assertStatus(404)
+            ->assertJsonPath('error.code', 'NOT_FOUND');
+
+        // Record unchanged
+        $this->assertDatabaseMissing('meetings', [
+            'id'         => $meeting->id,
+            'transcript' => 'Should not update.',
+        ]);
+    }
+
+    public function test_retry_meeting_with_wrong_org_id_returns_404(): void
+    {
+        // Create a meeting with an audio_path in org 1 and try to retry from org 2.
+        $org2 = Organization::factory()->create();
+        $meeting = Meeting::withoutGlobalScopes()->create([
+            'org_id'       => 1,
+            'title'        => 'Retry isolation test',
+            'meeting_date' => '2026-09-01',
+            'timezone'     => 'Asia/Karachi',
+            'source'       => 'upload',
+            'status'       => 'failed',
+            'created_by'   => 6,
+            'audio_path'   => 'meetings/original/fake.mp3',
+        ]);
+
+        $response = $this->withHeaders($this->headers())
+            ->postJson("/api/v1/meetings/{$meeting->id}/retry", [
+                'org_id' => $org2->id,
+            ]);
+
+        $response->assertStatus(404)
+            ->assertJsonPath('error.code', 'NOT_FOUND');
+
+        // Status must be unchanged
+        $this->assertDatabaseHas('meetings', [
+            'id'     => $meeting->id,
+            'status' => 'failed',
+        ]);
+    }
+
+    public function test_escalation_with_wrong_org_id_returns_404(): void
+    {
+        // Task belongs to org 1; send org_id for org 2 — must 404.
+        $org2 = Organization::factory()->create();
+        $task = Task::withoutGlobalScopes()->where('org_id', 1)->first();
+        $originalLevel = $task->escalation_level;
+
+        $response = $this->withHeaders($this->headers())
+            ->postJson("/api/v1/tasks/{$task->id}/escalation", [
+                'org_id'          => $org2->id,
+                'escalation_level' => 99,
+            ]);
+
+        $response->assertStatus(404)
+            ->assertJsonPath('error.code', 'NOT_FOUND');
+
+        // Escalation level must be unchanged
+        $task->refresh();
+        $this->assertEquals($originalLevel, $task->escalation_level);
+    }
+}

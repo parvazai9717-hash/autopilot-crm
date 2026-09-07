@@ -1,0 +1,878 @@
+# Build Prompt — Meeting → Action Autopilot CRM
+
+Paste this into Antigravity as the project brief.
+
+---
+
+## 1. WHAT YOU ARE BUILDING
+
+A B2B web application called **Meeting → Action Autopilot**.
+
+Companies hold meetings where people commit to doing things. After the
+meeting, those commitments are forgotten. This app captures a meeting
+recording, has an AI extract the commitments, lets a human approve them,
+turns them into tracked tasks, and follows up until they are done.
+
+This application is the **source of truth**. A separate automation layer
+(n8n) does the AI extraction and all email sending. The two talk over a
+REST API and webhooks.
+
+**Rule of thumb for what belongs here:** if it must still be true when
+the automation layer is switched off, it belongs in this application.
+
+---
+
+## 2. STACK
+
+- **Backend:** Laravel (latest stable), MySQL 8
+- **Frontend:** React + Tailwind CSS (separate SPA, not Blade)
+- **Auth:** Laravel Sanctum (SPA session auth for humans)
+- **API auth for n8n:** static API key in an `X-API-Key` header, checked
+  by dedicated middleware
+- **Queue:** Laravel queues on the `database` driver
+- **Hosting target:** Hostinger VPS (Ubuntu, nginx, PHP-FPM)
+- **Audio processing:** ffmpeg (must be installed on the server)
+
+Build the Laravel API and the React SPA as two folders in one repo:
+`/api` and `/web`.
+
+---
+
+## 3. ARCHITECTURE RULES — READ BEFORE CODING
+
+**This application DOES:**
+- Store all data and enforce all business rules
+- Authenticate and authorize users
+- Enforce the task state machine
+- Handle file upload and audio conversion
+- Serve the API that n8n reads from and writes to
+- Fire outbound webhooks when important things happen
+- Own all policy and configuration (escalation thresholds, reminder
+  windows, working hours)
+- Render all dashboards
+
+**This application DOES NOT:**
+- Call any AI or LLM API — n8n does that
+- Send any email or notification — n8n does that
+- Run any scheduled reminder jobs — n8n does that
+
+Do not add a mail driver, a notification queue, or an OpenAI client.
+If you feel the need to send an email, fire a webhook instead.
+
+---
+
+## 4. MULTI-TENANCY
+
+Version 1 serves a single company, but the schema must be multi-tenant
+from day one.
+
+- Every business table carries an `org_id` foreign key
+- Every query is scoped by `org_id` — use a Laravel global scope so this
+  cannot be forgotten
+- Seed exactly one organization for now
+- Never allow a query that could return another org's rows
+
+---
+
+## 5. API VERSIONING
+
+All machine endpoints live under `/api/v1/`.
+
+When the contract changes later, `/api/v2/` can be added without
+breaking the running n8n workflows. Never change the shape of a
+released v1 endpoint.
+
+---
+
+## 6. ENVIRONMENT VARIABLES
+
+Use exactly these names. The automation layer is already configured
+against them.
+
+```
+APP_TIMEZONE=Asia/Karachi
+
+DB_CONNECTION=mysql
+DB_DATABASE=autopilot
+DB_USERNAME=
+DB_PASSWORD=
+
+QUEUE_CONNECTION=database
+
+# Key that n8n sends in the X-API-Key header
+N8N_API_KEY=
+
+# Where this app posts its outbound webhooks
+N8N_WEBHOOK_MEETING_UPLOADED=
+N8N_WEBHOOK_MEETING_NEEDS_REVIEW=
+N8N_WEBHOOK_TASKS_APPROVED=
+N8N_WEBHOOK_TASK_COMPLETED=
+N8N_WEBHOOK_TASK_BLOCKED=
+
+# Shared secret used to HMAC-sign outbound webhook bodies
+WEBHOOK_SIGNING_SECRET=
+
+# Audio handling
+FFMPEG_PATH=/usr/bin/ffmpeg
+FFPROBE_PATH=/usr/bin/ffprobe
+MAX_UPLOAD_MB=500
+AUDIO_CHUNK_MAX_MB=24
+
+# How long a meeting may sit in `processing` before it is
+# considered stuck (minutes)
+MEETING_PROCESSING_TIMEOUT=30
+```
+
+---
+
+## 7. DATABASE SCHEMA
+
+### organizations
+```
+id, name, timezone, settings (json), created_at, updated_at
+```
+
+`settings` holds all org policy so the automation layer can read it
+instead of hardcoding it. Seed it with:
+
+```json
+{
+  "reminder_windows_days": {
+    "high":   [3, 2, 1, 0],
+    "medium": [2, 1, 0],
+    "low":    [1, 0]
+  },
+  "escalation_days_overdue": {
+    "high":   { "manager": 2, "executive": 5 },
+    "medium": { "manager": 4, "executive": 8 },
+    "low":    { "manager": 7, "executive": 14 }
+  },
+  "working_hours": { "start": "09:00", "end": "18:00" },
+  "working_days": [1, 2, 3, 4, 5],
+  "notification_channels": ["email"]
+}
+```
+
+### users
+```
+id, org_id, name, email (unique), password,
+phone (nullable), role, manager_id (nullable, FK users),
+status (active|inactive), created_at, updated_at
+```
+`role` enum: `employee`, `manager`, `admin`, `executive`
+
+### meetings
+```
+id, org_id, title, meeting_date (date), timezone,
+source, created_by (FK users),
+audio_path (nullable), audio_duration_seconds (nullable),
+transcript (longtext, nullable),
+summary (text, nullable),
+status, error_message (nullable),
+processing_started_at (nullable),
+created_at, updated_at
+```
+`status` enum: `uploaded`, `processing`, `extracted`, `reviewed`, `failed`
+
+`source` enum: `upload`, `text`, `zoom`, `google_meet`, `teams`,
+`whatsapp`, `bot`
+
+Only `upload` and `text` are used in v1. The other values exist so a
+different capture method can be added later without a migration.
+
+### meeting_participants
+```
+id, meeting_id, user_id (nullable), speaker_name,
+attendance_status, created_at
+```
+
+### tasks
+```
+id, org_id, meeting_id (nullable),
+title, description (text, nullable),
+
+owner_id (nullable, FK users),
+owner_name_raw (nullable),        -- what the AI heard, e.g. "Ali"
+owner_ambiguous (boolean, default false),
+
+created_by (FK users, nullable),
+approved_by (FK users, nullable),
+
+priority,                          -- high|medium|low
+status,                            -- see state machine below
+previous_status (nullable),        -- what to return to after unblocking
+due_date (date, nullable),
+deadline_phrase (nullable),        -- e.g. "by next Monday"
+source_text (text, nullable),      -- exact sentence from transcript
+conditional (boolean, default false),
+
+owner_confidence (decimal 3,2, nullable),
+deadline_confidence (decimal 3,2, nullable),
+action_confidence (decimal 3,2, nullable),
+
+last_reminder_at (date, nullable),
+escalation_level (int, default 0),
+
+approved_at (timestamp, nullable),
+started_at (timestamp, nullable),
+completed_at (timestamp, nullable),
+created_at, updated_at
+```
+
+Index `(org_id, status, due_date)` — the automation layer queries on
+this combination every morning.
+
+**`last_reminder_at` and `escalation_level` are not optional.**
+Without `last_reminder_at`, every employee receives the same reminder
+every single morning until the deadline passes. Without
+`escalation_level`, the manager is re-escalated about the same task
+every day. Both columns exist to stop the automation from spamming
+people, which is the fastest way to get the product muted.
+
+### task_events
+Append-only audit log. Never updated, never deleted.
+```
+id, task_id, event_type, actor_id (nullable, FK users),
+actor_type (user|ai|system),
+metadata (json, nullable), created_at
+```
+`event_type` values: `AI_DETECTED`, `APPROVAL_REQUESTED`, `APPROVED`,
+`REJECTED`, `EDITED`, `ASSIGNED`, `NOTIFICATION_SENT`, `REMINDER_SENT`,
+`STARTED`, `BLOCKED`, `UNBLOCKED`, `DEADLINE_APPROACHING`, `OVERDUE`,
+`ESCALATED`, `COMPLETED`
+
+### task_blockers
+```
+id, task_id, reason_code, description (text, nullable),
+blocked_by (FK users), depends_on_task_id (nullable, FK tasks),
+resolved_at (nullable), resolved_by (nullable), created_at
+```
+`reason_code` enum: `waiting_for_person`, `waiting_for_info`,
+`waiting_for_approval`, `technical_issue`, `unclear_requirement`, `other`
+
+### task_dependencies
+```
+id, task_id, depends_on_task_id, dependency_type,
+status (active|resolved), created_by, created_at
+```
+Only created when a human declares one. No AI-inferred dependencies in v1.
+
+### task_comments
+```
+id, task_id, user_id, body (text),
+attachment_path (nullable), created_at
+```
+
+### notifications
+Written by n8n via the API so the app knows what was already sent.
+```
+id, task_id (nullable), recipient_id, channel,
+notification_type, sent_at, delivery_status, created_at
+```
+`channel` is a string, not an enum. Today it is always `email`. Later
+it may be `whatsapp`, `slack`, or `teams` — adding one must not require
+a migration.
+
+### webhook_deliveries
+```
+id, event_type, payload (json), target_url,
+attempt_count, last_status_code (nullable),
+last_error (nullable), delivered_at (nullable),
+created_at, updated_at
+```
+Every outbound webhook attempt is logged here. Without this, a failed
+delivery is invisible and impossible to debug.
+
+### idempotency_keys
+```
+id, key (unique), endpoint, response_body (json),
+created_at
+```
+See section 12.
+
+---
+
+## 8. TIMEZONE RULE — READ CAREFULLY
+
+Deadlines are **dates**, not timestamps.
+
+"Due Friday" means the end of Friday in the organization's timezone,
+not UTC midnight. Getting this wrong marks tasks overdue a day early
+for anyone east of UTC, which includes Pakistan.
+
+Rules:
+
+- Store `due_date` as a MySQL `DATE` column. Never a datetime.
+- A task is overdue when `due_date < today` where "today" is computed
+  in `organizations.timezone`, not in UTC and not in the server's
+  timezone.
+- Do all date comparisons in PHP using
+  `Carbon::now($org->timezone)->startOfDay()`.
+- All timestamps (`created_at`, `completed_at`) stay UTC as normal.
+  Only `due_date` follows this rule.
+- The API returns `due_date` as a plain `YYYY-MM-DD` string with no
+  time component and no timezone suffix.
+
+---
+
+## 9. TASK STATE MACHINE
+
+```
+detected → pending_approval → approved → assigned → in_progress → completed
+```
+
+Additional states: `rejected`, `blocked`, `overdue`, `escalated`
+
+Enforce legal transitions in a dedicated service class
+(`app/Services/TaskStateMachine.php`). Reject invalid jumps with a 422
+and a clear message. Examples of illegal moves:
+
+- `pending_approval` → `completed` (must be approved first)
+- `completed` → `in_progress` (cannot un-complete)
+- `rejected` → anything (terminal)
+
+Every transition writes a row to `task_events`.
+
+`blocked` is reversible. When a task is blocked, write its current
+status into `previous_status`. When unblocked, restore it.
+
+---
+
+## 10. AUDIO UPLOAD AND CONVERSION
+
+The meeting recording is uploaded here, but transcription happens in
+n8n using OpenAI Whisper.
+
+**Whisper rejects any file larger than 25MB.** A one-hour meeting
+recorded as WAV is far past this. The conversion is this application's
+responsibility — n8n must never receive a file Whisper will refuse.
+
+### Server configuration required
+
+The default PHP and nginx limits will reject a meeting recording long
+before your code sees it. Document these in a `SETUP.md` and print a
+warning at boot if they are too low.
+
+`php.ini`:
+```
+upload_max_filesize = 500M
+post_max_size = 500M
+max_execution_time = 300
+memory_limit = 512M
+```
+
+nginx site config:
+```
+client_max_body_size 500M;
+client_body_timeout 300s;
+```
+
+Install ffmpeg:
+```bash
+sudo apt update && sudo apt install -y ffmpeg
+```
+
+### Upload flow
+
+1. `POST /api/v1/meetings/upload` accepts an audio or video file
+   (mp3, m4a, wav, mp4, webm, ogg) plus `title` and `meeting_date`
+2. Validate mime type and size. Reject anything over `MAX_UPLOAD_MB`.
+3. Store the original in `storage/app/meetings/original/`
+4. Create the meeting row with `status = uploaded`, return the id
+   **immediately**
+5. Dispatch `ProcessMeetingAudio` job to the queue
+
+Inside the job:
+
+6. Convert with ffmpeg to mono MP3 at 32kbps:
+
+```bash
+ffmpeg -i {input} -ac 1 -ar 16000 -b:a 32k -y {output}
+```
+
+   This produces roughly 14MB per hour of audio.
+
+7. Read duration with ffprobe, save `audio_duration_seconds`
+8. **If the converted file still exceeds `AUDIO_CHUNK_MAX_MB`**, split
+   into 30-minute segments and expose the chunk URLs as an array. n8n
+   transcribes each and joins the text.
+
+```bash
+ffmpeg -i {input} -f segment -segment_time 1800 -c copy {output}_%03d.mp3
+```
+
+9. Store output in `storage/app/meetings/processed/`
+10. Generate a **signed, expiring public URL** (24 hours) so n8n can
+    download without auth headers
+11. Set `status = processing`, `processing_started_at = now()`
+12. Fire `meeting.uploaded`
+
+If ffmpeg fails: `status = failed`, write `error_message`, do not fire
+the webhook.
+
+### Queue worker — this will not work without it
+
+The conversion runs on the queue. On a fresh server nothing processes
+that queue, so every upload sits silently forever and looks like ffmpeg
+is broken.
+
+Include this supervisor config in `SETUP.md`:
+
+```ini
+[program:autopilot-worker]
+process_name=%(program_name)s_%(process_num)02d
+command=php /var/www/autopilot/api/artisan queue:work --sleep=3 --tries=3 --timeout=600
+autostart=true
+autorestart=true
+user=www-data
+numprocs=2
+redirect_stderr=true
+stdout_logfile=/var/www/autopilot/api/storage/logs/worker.log
+stopwaitsecs=700
+```
+
+Then:
+```bash
+sudo supervisorctl reread && sudo supervisorctl update
+sudo supervisorctl start autopilot-worker:*
+```
+
+Note `--timeout=600`. Converting a long recording takes minutes; the
+default 60-second timeout kills it mid-job.
+
+### Stuck meetings
+
+If n8n never calls back, a meeting sits in `processing` forever with no
+way out.
+
+- Add a scheduled command `meetings:check-stuck` (runs every 10 minutes)
+  that finds meetings where `status = processing` and
+  `processing_started_at` is older than `MEETING_PROCESSING_TIMEOUT`
+  minutes, and sets them to `failed` with a clear `error_message`.
+- Add `POST /api/v1/meetings/{id}/retry` (admin only) that resets the
+  meeting to `uploaded` and re-dispatches the job.
+- Show a **Retry** button on any failed meeting in the UI.
+
+This is the one Laravel scheduler entry the app needs. It is
+housekeeping, not notification, so it does not violate section 3.
+
+```bash
+* * * * * cd /var/www/autopilot/api && php artisan schedule:run >> /dev/null 2>&1
+```
+
+### Also accept text
+
+`POST /api/v1/meetings` with a `transcript` field and no file. Skip all
+conversion, set `source = text`, `status = processing`, and fire the
+same webhook with the transcript inline instead of an audio URL.
+
+---
+
+## 11. API FOR n8n
+
+All routes under `/api/v1/`, protected by `X-API-Key` middleware.
+Machine endpoints — no Sanctum session required.
+
+```
+GET  /api/v1/users?org_id=1
+     → [{ id, name, email, manager_id, manager_name, manager_email }]
+
+GET  /api/v1/orgs/{id}/settings
+     → the settings json from section 7
+     Lets the automation layer read reminder windows and escalation
+     thresholds instead of hardcoding them.
+
+POST /api/v1/meetings
+     ← { org_id, title, date, transcript, summary }
+     → { meeting_id }
+
+PATCH /api/v1/meetings/{id}
+     ← { transcript, summary, status }
+     → { ok: true }
+     Used by n8n to write back the transcript after Whisper runs.
+
+POST /api/v1/action-items
+     ← { org_id, meeting_id, action_items: [ ... ] }
+     → { created: n, task_ids: [ ... ] }
+     Inserts tasks with status = pending_approval.
+     Sets meeting status = extracted.
+     Writes an AI_DETECTED task_event for each.
+     Then fires meeting.needs_review.
+
+GET  /api/v1/tasks?org_id=1&status=assigned&due_within_days=3
+GET  /api/v1/tasks?org_id=1&status=overdue
+GET  /api/v1/tasks?org_id=1&status=blocked
+     → { data: [ ... ], meta: { page, per_page, total } }
+
+POST /api/v1/task-events
+     ← { task_id, event_type, actor_type, channel, metadata }
+     → { ok: true }
+     When event_type = REMINDER_SENT, also set
+     tasks.last_reminder_at = today (in org timezone).
+
+POST /api/v1/tasks/{id}/escalation
+     ← { escalation_level: n }
+     → { ok: true }
+```
+
+### Task list response shape
+
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "title": "Prepare ABC proposal",
+      "owner_id": 1,
+      "owner_name": "Ahmed Raza",
+      "owner_email": "ahmed@test.com",
+      "manager_id": 5,
+      "manager_name": "Bilal Sheikh",
+      "manager_email": "bilal@test.com",
+      "due_date": "2026-09-04",
+      "priority": "high",
+      "status": "assigned",
+      "last_reminder_at": null,
+      "escalation_level": 0
+    }
+  ],
+  "meta": { "page": 1, "per_page": 100, "total": 1 }
+}
+```
+
+Default `per_page` 100, max 500. The automation layer must be able to
+page through a large org.
+
+### Exact shape of one action_item
+
+This is what the AI produces. Accept it exactly:
+
+```json
+{
+  "title": "Prepare ABC proposal",
+  "description": "Prepare the ABC proposal",
+  "owner_id": "u_1",
+  "owner_name_raw": "Ahmed Raza",
+  "owner_ambiguous": false,
+  "due_date": "2026-09-04",
+  "deadline_phrase": "by Friday",
+  "priority": "high",
+  "conditional": false,
+  "source_text": "Ahmed, please prepare the ABC proposal by Friday.",
+  "action_confidence": 1,
+  "owner_confidence": 1,
+  "deadline_confidence": 0.85,
+  "status": "pending_approval"
+}
+```
+
+`owner_id` may be `null` when `owner_ambiguous` is `true`. Store the
+task anyway — the reviewer resolves it before approving.
+
+---
+
+## 12. IDEMPOTENCY
+
+n8n retries failed HTTP calls. Without protection, one retried
+`POST /action-items` creates a second full set of duplicate tasks.
+
+- Accept an optional `Idempotency-Key` header on all POST endpoints
+- On first use: process normally, store the key and the response body
+- On repeat: return the stored response, do nothing else
+- Expire keys after 24 hours
+
+---
+
+## 13. API ERROR FORMAT
+
+Every error, from every endpoint, returns this shape. No exceptions.
+
+```json
+{
+  "error": {
+    "code": "OWNER_REQUIRED",
+    "message": "Cannot approve a task with an unresolved owner.",
+    "field": "owner_id"
+  }
+}
+```
+
+Status codes:
+- `400` malformed request
+- `401` missing or bad API key / not logged in
+- `403` authenticated but not allowed
+- `404` not found, or belongs to another org
+- `409` illegal state transition
+- `422` validation failed
+- `429` rate limited
+- `500` unexpected
+
+Return `404`, not `403`, when a record belongs to another org. Never
+confirm that another tenant's record exists.
+
+---
+
+## 14. OUTBOUND WEBHOOKS
+
+URLs come from `.env`. Fire as queued jobs with exponential backoff,
+5 attempts. Log every attempt to `webhook_deliveries`.
+
+```
+meeting.uploaded
+  → { org_id, meeting_id, title, meeting_date, timezone, source,
+      audio_url | audio_chunks[] | transcript }
+
+meeting.needs_review
+  → { org_id, meeting_id, title, task_count,
+      approver_email, approver_name, review_url }
+
+tasks.approved
+  → { org_id, meeting_id, tasks: [ { id, title, owner_id,
+        owner_name, owner_email, due_date, priority } ] }
+
+task.completed
+  → { org_id, task_id, title, completed_by, completed_at,
+      manager_email }
+
+task.blocked
+  → { org_id, task_id, title, reason_code, description,
+      blocked_by, depends_on_task_id, manager_email }
+```
+
+Every payload also carries:
+```json
+{ "event": "tasks.approved", "event_id": "uuid", "fired_at": "ISO8601" }
+```
+
+`event_id` lets the automation layer discard a duplicate delivery.
+
+Sign the raw body with `WEBHOOK_SIGNING_SECRET` using HMAC-SHA256 and
+send it as `X-Signature`.
+
+Add an admin screen listing recent `webhook_deliveries` with a
+**Resend** button. When something does not arrive, this is the first
+place to look.
+
+---
+
+## 15. SEED DATA — USE THESE EXACT USERS
+
+The automation workflows are already built and tested against this
+roster. Seed it exactly so the two halves connect on the first run.
+
+**Organization:** id 1, name "Demo Company", timezone `Asia/Karachi`
+
+| id | name | email | role | manager_id |
+|----|------|-------|------|------------|
+| 1 | Ahmed Raza | ahmed@test.com | employee | 5 |
+| 2 | Sarah Khan | sarah@test.com | employee | 5 |
+| 3 | Ali Khan | ali.k@test.com | employee | 5 |
+| 4 | Ali Raza | ali.r@test.com | employee | 5 |
+| 5 | Bilal Sheikh | bilal@test.com | manager | 6 |
+| 6 | Ahmad Ameen | admin@test.com | admin | null |
+
+Password for all seeded users: `password123`
+
+Two people named Ali is deliberate. It is the ambiguity test case — the
+AI cannot tell them apart from a first name alone, and the review screen
+must force the approver to choose.
+
+Also seed one meeting with this transcript and its three extracted
+tasks in `pending_approval`, so the review screen has something to show
+before any upload happens:
+
+```
+Ahmed, please prepare the ABC proposal by Friday. Sarah will contact
+the supplier tomorrow for pricing. We should probably redesign the
+website at some point. Ali will send me the financial report by next
+Monday.
+```
+
+---
+
+## 16. THE REVIEW SCREEN
+
+The most important screen in the product. Everything else is ordinary
+CRUD; this is where trust is won or lost.
+
+When n8n finishes extraction, the app fires `meeting.needs_review` and
+n8n emails the approver a link to this screen.
+
+**Approvers:** any user with role `admin`, or the user who uploaded the
+meeting.
+
+The screen lists every extracted task as a card showing:
+
+- Title and description, both editable inline
+- Owner dropdown, pre-filled from `owner_id`
+- Due date picker, pre-filled from `due_date`
+- Priority selector
+- **The `source_text` shown directly beneath**, so the reviewer can see
+  the exact sentence that produced this task
+- The full transcript in a side panel, scrollable
+
+**Visual flags:**
+
+- `owner_ambiguous = true` → red border, owner dropdown empty and
+  required. Show `owner_name_raw` as a hint: *"AI heard 'Ali' — multiple
+  matches"*. **Approve is disabled until an owner is chosen.**
+- `deadline_confidence < 0.7` → amber highlight on the date field with
+  the original `deadline_phrase` shown beside it
+- `conditional = true` → a "Conditional" badge and the condition text
+
+**Actions:** Approve, Edit, Reject per card, plus Approve All (which
+skips any card still missing a required owner).
+
+On approve:
+- status → `approved`, then immediately `assigned`
+- write `approved_at`, `approved_by`
+- write `APPROVED` and `ASSIGNED` task_events
+- when the last card is resolved, set meeting status to `reviewed` and
+  fire `tasks.approved` with every approved task
+
+**Do not put approve or reject buttons inside the notification email.**
+A reviewer cannot pick between two people named Ali or correct a wrong
+date from an email button. The email links here; the deciding happens
+on this screen.
+
+---
+
+## 17. OTHER SCREENS
+
+### Employee — "My Tasks"
+Grouped into Overdue (red), Due Today (amber), Upcoming (green).
+Deliberately minimal. Per task: Start, Complete, Comment, Attach file,
+**I'm Blocked**.
+
+### Blocker flow
+A modal, not a page. Reason dropdown (6 options), an optional free-text
+box, and an **optional** dropdown *"Are you waiting on another task?"*
+listing the org's open tasks.
+
+That last field is what builds the dependency graph. Keep it optional —
+make it mandatory and people will avoid the button entirely, and then
+the graph stays empty.
+
+On submit: status → `blocked` (saving `previous_status`), write a
+`task_blockers` row, write a `BLOCKED` event, create a
+`task_dependencies` row if a task was picked, fire `task.blocked`.
+
+### Manager dashboard
+Direct reports only (`users.manager_id = me`). Shows team tasks, overdue,
+blocked, upcoming, completion rate. Manager can reassign, change a
+deadline, comment, resolve a blocker, escalate manually.
+
+### Executive dashboard
+Counts only, not a task list: active, completed today, overdue, blocked,
+at risk, awaiting approval.
+
+Below the counts, three exception lists:
+1. **Critical blockers** — blocked tasks, who is waiting on whom, how long
+2. **At risk** — tasks whose dependency is overdue
+3. **Awaiting approval** — meetings extracted but not yet reviewed
+
+A task is **at risk** when it is not yet complete and it has an active
+dependency on a task that is now overdue. Compute this on read; do not
+store it.
+
+### Admin
+Users, departments, manager assignments, org settings (the JSON from
+section 7, edited through a form), API key, webhook URLs, and the
+webhook delivery log.
+
+---
+
+## 18. AUTHORIZATION
+
+- **employee** — own tasks only. Cannot see others' tasks.
+- **manager** — own tasks + direct reports' tasks
+- **executive** — all tasks in the org, read-only on other people's work
+- **admin** — everything, plus configuration and the review screen
+
+Enforce with Laravel policies, not with frontend hiding. Assume the
+frontend can be bypassed.
+
+Rate limit the `X-API-Key` routes at 300 requests/minute so a runaway
+automation loop cannot exhaust the server.
+
+---
+
+## 19. WHAT NOT TO BUILD
+
+- No email sending of any kind
+- No scheduled reminder or escalation jobs (the only scheduled command
+  is `meetings:check-stuck`)
+- No AI or LLM calls
+- No Zoom, Meet, or Teams integration
+- No mobile app
+- No employee monitoring, screenshots, activity scoring, or keystroke
+  tracking of any kind
+- No payroll, HR, or recruitment features
+- No real-time websockets — polling is fine
+
+---
+
+## 20. DESIGNED FOR LATER — DO NOT BUILD NOW
+
+These are shapes the schema already supports. Do not implement them,
+but do not design in a way that blocks them.
+
+- **More notification channels.** `notifications.channel` is a free
+  string and `settings.notification_channels` is an array. Adding
+  WhatsApp or Slack later must not require a migration.
+- **More capture sources.** `meetings.source` already has enum values
+  for zoom, meet, teams, whatsapp, and bot. A new capture method only
+  needs to create a meeting row and fire `meeting.uploaded`.
+- **More tenants.** `org_id` and the global scope are already in place.
+  Adding organization #2 must require no schema change.
+- **AI-detected dependencies.** `task_dependencies.created_by` will
+  eventually accept a system actor instead of a user.
+- **A second API version.** `/api/v1/` is namespaced from the start.
+
+---
+
+## 21. DELIVERABLES
+
+Alongside the code, produce:
+
+**`SETUP.md`** containing:
+- Server prerequisites (PHP version, MySQL, ffmpeg, supervisor)
+- The php.ini and nginx values from section 10
+- The supervisor config, verbatim
+- The cron line for the scheduler
+- Every `.env` variable with an explanation
+- Exact commands from clone to running app
+
+**`API.md`** containing:
+- Every `/api/v1/` endpoint with a working curl example
+- Every outbound webhook with a sample payload
+- The error code table
+
+**Postman collection** covering all machine endpoints.
+
+---
+
+## 22. BUILD ORDER
+
+Do not generate the whole application at once. Work in these phases and
+stop after each one for review.
+
+1. Laravel setup, migrations, models, seeders (section 15 data exactly)
+2. Sanctum auth + `X-API-Key` middleware + policies + error format
+3. The `/api/v1/` machine endpoints, testable with Postman
+4. Task state machine service + task_events logging
+5. Outbound webhook system with HMAC, retries, and delivery log
+6. Audio upload + ffmpeg queued job + signed URLs + stuck-meeting command
+7. React SPA shell, login, routing, layout
+8. The review screen
+9. Employee task view + blocker modal
+10. Manager dashboard
+11. Executive dashboard
+12. Admin configuration + webhook delivery log screen
+
+For every phase: state which files you are creating, keep code modular,
+validate all input, handle errors, and explain any non-obvious decision
+in plain language. Do not rewrite working code from an earlier phase.
+
+Write a feature test for the state machine and for each `/api/v1/`
+endpoint. Skip tests everywhere else.
