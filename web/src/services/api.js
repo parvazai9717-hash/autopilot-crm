@@ -14,15 +14,35 @@ const api = axios.create({
   xsrfHeaderName: 'X-XSRF-TOKEN',
 });
 
-// Response interceptor — normalise every error into a standard { code, message, field } shape
+// ─── 419 Auto-retry + error-normalising interceptor ──────────────────────────
+// When the server returns 419 (CSRF token mismatch), fetch a fresh CSRF cookie
+// and automatically retry the original request once. This handles the case
+// where the session was regenerated (e.g. after login) and the browser's
+// XSRF-TOKEN cookie became stale.
+let _csrfRefreshing = false;
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
+    const status = error.response?.status;
+
+    // Auto-retry once on 419 CSRF mismatch
+    if (status === 419 && !error.config.__csrfRetried && !_csrfRefreshing) {
+      error.config.__csrfRetried = true;
+      _csrfRefreshing = true;
+      try {
+        await api.get(`/sanctum/csrf-cookie?_t=${Date.now()}`);
+      } finally {
+        _csrfRefreshing = false;
+      }
+      return api(error.config);
+    }
+
+    // Normalise all other errors into { code, message, field }
     if (error.response?.data?.error) {
       error.apiError = error.response.data.error;
     } else if (error.response?.data?.message) {
       error.apiError = {
-        code: error.response.status === 419 ? 'CSRF_MISMATCH' : 'HTTP_ERROR',
+        code: status === 419 ? 'CSRF_MISMATCH' : 'HTTP_ERROR',
         message: error.response.data.message,
         field: null,
       };
@@ -44,12 +64,23 @@ export const authApi = {
 
   // SPA session login.
   login: async (email, password, remember = false) => {
+    // 1. Pre-fetch CSRF cookie to seed the session
     try {
       await authApi.getCsrfCookie();
     } catch {
-      // Continue to login even if preflight CSRF cookie fetch has issues
+      // Continue even if preflight fails; the 419 interceptor will retry if needed
     }
+    // 2. Login (exempted from CSRF validation on the server)
     const response = await api.post('/api/auth/login', { email, password, remember });
+    // 3. CRITICAL: After login Laravel regenerates the session, which creates a new
+    //    CSRF token. Re-fetch the csrf-cookie so the browser's XSRF-TOKEN cookie
+    //    is synced with the new session. Without this, ALL subsequent POST/PUT/DELETE
+    //    requests will fail with 419 CSRF token mismatch.
+    try {
+      await authApi.getCsrfCookie();
+    } catch {
+      // Non-fatal; the 419 interceptor will handle retries if needed
+    }
     return response.data;
   },
 
