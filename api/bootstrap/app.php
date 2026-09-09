@@ -31,6 +31,11 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->trustProxies(at: '*');
         $middleware->statefulApi();
 
+        $middleware->validateCsrfTokens(except: [
+            'api/auth/login',
+            'api/auth/logout',
+        ]);
+
         $middleware->redirectGuestsTo(fn (Request $request) => null);
         $middleware->api(prepend: [
             // Must run first so stale remember_web_* cookies are caught

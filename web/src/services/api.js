@@ -40,11 +40,15 @@ api.interceptors.response.use(
 
 export const authApi = {
   // Must be called before login to seed XSRF-TOKEN and autopilot_session cookies.
-  getCsrfCookie: () => api.get('/sanctum/csrf-cookie'),
+  getCsrfCookie: () => api.get(`/sanctum/csrf-cookie?_t=${Date.now()}`),
 
   // SPA session login.
   login: async (email, password, remember = false) => {
-    await authApi.getCsrfCookie();
+    try {
+      await authApi.getCsrfCookie();
+    } catch {
+      // Continue to login even if preflight CSRF cookie fetch has issues
+    }
     const response = await api.post('/api/auth/login', { email, password, remember });
     return response.data;
   },

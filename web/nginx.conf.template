@@ -30,6 +30,8 @@ server {
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Host $host;
         proxy_cookie_domain __BACKEND_HOST__ $host;
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-store, no-cache, must-revalidate, max-age=0";
     }
 
     location / {
