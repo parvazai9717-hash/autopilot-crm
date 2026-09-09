@@ -32,8 +32,8 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->statefulApi();
 
         $middleware->validateCsrfTokens(except: [
-            'api/auth/login',
-            'api/auth/logout',
+            'api/*',
+            'sanctum/csrf-cookie',
         ]);
 
         $middleware->redirectGuestsTo(fn (Request $request) => null);

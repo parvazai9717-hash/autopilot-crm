@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-BACKEND_URL="${BACKEND_URL:-https://lockout-gate-autopilot-api.qt5ga9.easypanel.host}"
+BACKEND_URL="${BACKEND_URL:-https://lockout-gate-autopilot-api.qt5ge9.easypanel.host}"
 BACKEND_URL="${BACKEND_URL%/}"
 
 BACKEND_HOST=$(echo "$BACKEND_URL" | sed -e 's|^[^/]*//||' -e 's|/.*$||' -e 's|:.*$||')
