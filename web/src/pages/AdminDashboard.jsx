@@ -401,7 +401,7 @@ export const AdminDashboard = () => {
           </div>
         </div>
         <Link
-          to="/meetings/1/review"
+          to="/meetings/new"
           className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-500/20 shrink-0 transition-all"
         >
           <span>Open Review Screen</span>
@@ -779,11 +779,11 @@ export const AdminDashboard = () => {
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-medium text-slate-400 mb-1">Current Active Key</label>
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-slate-300 select-all tracking-wider">
-                        {apiKeyMasked}
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-slate-300 select-all tracking-wider overflow-hidden">
+                        <span className="block truncate">{apiKeyMasked}</span>
                       </div>
-                      <span className="text-[11px] text-slate-500 px-2 py-1 bg-slate-900 rounded border border-slate-800">
+                      <span className="shrink-0 text-[11px] text-slate-500 px-2 py-1 bg-slate-900 rounded border border-slate-800 whitespace-nowrap">
                         Masked for security
                       </span>
                     </div>

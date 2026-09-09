@@ -242,7 +242,8 @@ class AdminController extends Controller
 
         if ($hasKey) {
             $last4 = substr($rawKey, -4);
-            $maskedKey = str_repeat('•', max(12, strlen($rawKey) - 4)) . $last4;
+            // Cap at 20 bullets regardless of the actual key length to prevent UI overflow
+            $maskedKey = str_repeat('•', 20) . $last4;
         }
 
         return response()->json([
@@ -444,7 +445,7 @@ class AdminController extends Controller
         $org->save();
 
         $last4 = substr($newKey, -4);
-        $masked = str_repeat('•', strlen($newKey) - 4) . $last4;
+        $masked = str_repeat('•', 20) . $last4;
 
         return response()->json([
             'ok'        => true,
