@@ -3,7 +3,7 @@ import axios from 'axios';
 // Cookie-session only (Sanctum SPA auth).
 // No Bearer tokens, no localStorage — the session cookie is the auth credential.
 const api = axios.create({
-  baseURL: '',
+  baseURL: import.meta.env.VITE_API_URL || '',
   headers: {
     'Accept': 'application/json',
     'Content-Type': 'application/json',
