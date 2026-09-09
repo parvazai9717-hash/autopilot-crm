@@ -66,7 +66,10 @@ class DispatchWebhook implements ShouldQueue
         // Increment attempt count on every attempt
         $delivery->increment('attempt_count');
 
-        $n8nApiKey = config('autopilot.n8n_api_key', '');
+        // Resolve active API key: check organization settings first, then config/env
+        $orgId = $payload['org_id'] ?? 1;
+        $org = \App\Models\Organization::withoutGlobalScopes()->find($orgId);
+        $n8nApiKey = $org?->settings['api_key'] ?? config('autopilot.n8n_api_key', '');
 
         try {
             $headers = [
@@ -80,6 +83,7 @@ class DispatchWebhook implements ShouldQueue
             // on its incoming Webhook node as it does on outgoing HTTP Requests.
             if (!empty($n8nApiKey)) {
                 $headers['X-API-Key'] = $n8nApiKey;
+                $headers['x-api-key'] = $n8nApiKey;
             }
 
             $response = Http::timeout($this->timeout)
