@@ -156,4 +156,87 @@ class TaskController extends Controller
             'ok' => true,
         ]);
     }
+
+    /**
+     * PATCH /api/v1/tasks/{id}
+     * Directly update reminder date, escalation level, or status from automation.
+     */
+    public function update(Request $request, int $id): JsonResponse
+    {
+        $validated = $request->validate([
+            'org_id'           => ['nullable', 'integer'],
+            'escalation_level' => ['nullable', 'integer', 'min:0'],
+            'last_reminder'    => ['nullable', 'date'],
+            'last_reminder_at' => ['nullable', 'date'],
+            'status'           => ['nullable', 'string', 'in:assigned,in_progress,blocked,completed,overdue,rejected'],
+        ]);
+
+        $query = Task::withoutGlobalScopes()->where('id', $id);
+        if (!empty($validated['org_id'])) {
+            $query->where('org_id', $validated['org_id']);
+        }
+        $task = $query->first();
+
+        if (!$task) {
+            return ApiResponse::error(
+                'NOT_FOUND',
+                'Task not found.',
+                404
+            );
+        }
+
+        $updates = [];
+
+        if (array_key_exists('escalation_level', $validated)) {
+            $newLevel = (int) $validated['escalation_level'];
+            $updates['escalation_level'] = $newLevel;
+
+            TaskEvent::create([
+                'task_id'    => $task->id,
+                'event_type' => 'ESCALATED',
+                'actor_type' => 'system',
+                'actor_id'   => null,
+                'metadata'   => [
+                    'escalation_level' => $newLevel,
+                ],
+                'created_at' => now(),
+            ]);
+        }
+
+        $reminderDate = $validated['last_reminder_at'] ?? $validated['last_reminder'] ?? null;
+        if ($reminderDate !== null || array_key_exists('last_reminder_at', $validated) || array_key_exists('last_reminder', $validated)) {
+            $parsedDate = $reminderDate ? Carbon::parse($reminderDate)->toDateString() : now()->toDateString();
+            $updates['last_reminder_at'] = $parsedDate;
+
+            TaskEvent::create([
+                'task_id'    => $task->id,
+                'event_type' => 'REMINDER_SENT',
+                'actor_type' => 'system',
+                'actor_id'   => null,
+                'metadata'   => [
+                    'reminder_date' => $parsedDate,
+                ],
+                'created_at' => now(),
+            ]);
+        }
+
+        if (!empty($validated['status'])) {
+            $updates['status'] = $validated['status'];
+        }
+
+        if (!empty($updates)) {
+            $task->update($updates);
+        }
+
+        return response()->json([
+            'ok' => true,
+            'task' => [
+                'id'               => $task->id,
+                'status'           => $task->status,
+                'escalation_level' => (int) $task->escalation_level,
+                'last_reminder_at' => $task->last_reminder_at ? Carbon::parse($task->last_reminder_at)->format('Y-m-d') : null,
+            ],
+        ]);
+    }
 }
+

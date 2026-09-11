@@ -139,8 +139,9 @@ Route::prefix('v1')->middleware(['n8n.key', 'throttle:n8n-api'])->group(function
     // Action items ingestion
     Route::post('/action-items', [ActionItemController::class, 'store']);
 
-    // Tasks list
+    // Tasks list and updates
     Route::get('/tasks', [TaskController::class, 'index']);
+    Route::patch('/tasks/{id}', [TaskController::class, 'update']);
     Route::post('/tasks/{id}/escalation', [TaskController::class, 'escalation']);
 
     // Task events

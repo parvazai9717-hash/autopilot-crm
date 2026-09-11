@@ -309,6 +309,42 @@ class MachineApiTest extends TestCase
         ]);
     }
 
+    public function test_patch_task_updates_reminder_and_escalation_level(): void
+    {
+        $task = Task::withoutGlobalScopes()->where('org_id', 1)->first();
+
+        $response = $this->withHeaders($this->headers())
+            ->patchJson("/api/v1/tasks/{$task->id}", [
+                'org_id'           => 1,
+                'escalation_level' => 3,
+                'last_reminder'    => '2026-09-11',
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJson([
+                'ok'   => true,
+                'task' => [
+                    'id'               => $task->id,
+                    'escalation_level' => 3,
+                    'last_reminder_at' => '2026-09-11',
+                ],
+            ]);
+
+        $task->refresh();
+        $this->assertEquals(3, $task->escalation_level);
+        $this->assertEquals('2026-09-11', $task->last_reminder_at?->format('Y-m-d'));
+
+        $this->assertDatabaseHas('task_events', [
+            'task_id'    => $task->id,
+            'event_type' => 'ESCALATED',
+        ]);
+
+        $this->assertDatabaseHas('task_events', [
+            'task_id'    => $task->id,
+            'event_type' => 'REMINDER_SENT',
+        ]);
+    }
+
     // ---------------------------------------------------------------
     // Cross-tenant isolation tests
     // ---------------------------------------------------------------
