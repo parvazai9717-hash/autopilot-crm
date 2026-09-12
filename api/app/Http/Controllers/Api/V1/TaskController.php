@@ -121,14 +121,15 @@ class TaskController extends Controller
     public function escalation(Request $request, int $id): JsonResponse
     {
         $validated = $request->validate([
-            'org_id'          => ['required', 'integer'],
+            'org_id'           => ['nullable', 'integer'],
             'escalation_level' => ['required', 'integer', 'min:0'],
         ]);
 
-        $task = Task::withoutGlobalScopes()
-            ->where('id', $id)
-            ->where('org_id', $validated['org_id'])
-            ->first();
+        $query = Task::withoutGlobalScopes()->where('id', $id);
+        if (!empty($validated['org_id'])) {
+            $query->where('org_id', $validated['org_id']);
+        }
+        $task = $query->first();
 
         if (!$task) {
             return ApiResponse::error(

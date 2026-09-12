@@ -345,6 +345,27 @@ class MachineApiTest extends TestCase
         ]);
     }
 
+    public function test_post_task_escalate_updates_level_without_org_id(): void
+    {
+        $task = Task::withoutGlobalScopes()->where('org_id', 1)->first();
+
+        $response = $this->withHeaders($this->headers())
+            ->postJson("/api/v1/tasks/{$task->id}/escalate", [
+                'escalation_level' => 4,
+            ]);
+
+        $response->assertStatus(200)
+            ->assertJson(['ok' => true]);
+
+        $task->refresh();
+        $this->assertEquals(4, $task->escalation_level);
+
+        $this->assertDatabaseHas('task_events', [
+            'task_id'    => $task->id,
+            'event_type' => 'ESCALATED',
+        ]);
+    }
+
     // ---------------------------------------------------------------
     // Cross-tenant isolation tests
     // ---------------------------------------------------------------
