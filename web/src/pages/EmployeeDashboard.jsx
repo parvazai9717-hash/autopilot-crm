@@ -26,6 +26,7 @@ const PRIORITY_COLORS = {
 
 const STATUS_LABELS = {
   assigned:    'Assigned',
+  approved:    'Approved',
   in_progress: 'In Progress',
   blocked:     'Blocked',
   overdue:     'Overdue',
@@ -266,6 +267,7 @@ function TaskCard({ task, openTasks, onAction }) {
     const label  = labels[task.status] ?? task.status;
     const cls = {
       assigned:    'text-indigo-300 bg-indigo-500/10 border-indigo-500/20',
+      approved:    'text-teal-300 bg-teal-500/10 border-teal-500/20',
       in_progress: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/20',
       blocked:     'text-orange-300 bg-orange-500/10 border-orange-500/20',
       overdue:     'text-rose-300 bg-rose-500/10 border-rose-500/20',

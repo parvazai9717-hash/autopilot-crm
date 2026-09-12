@@ -316,7 +316,7 @@ export const NewMeetingPage = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+    <div className="space-y-6 pb-16">
       {/* Top Header */}
       <div className="max-w-4xl mx-auto mb-8">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">

@@ -124,10 +124,19 @@ export const MeetingReviewPage = () => {
         owner_id: numericOwnerId,
       });
 
-      // Update task in state
-      setTasks((prev) =>
-        prev.map((t) => (t.id === taskId ? { ...t, ...res.task } : t))
-      );
+      // Update task in state and recompute stats from the updated list
+      setTasks((prev) => {
+        const updated = prev.map((t) => (t.id === taskId ? { ...t, ...res.task } : t));
+        // Recompute stats from the fresh updated list (avoids stale closure)
+        setStats({
+          total: updated.length,
+          pending: updated.filter((t) => ['pending_approval', 'detected'].includes(t.status)).length,
+          approved: updated.filter((t) => ['approved', 'assigned', 'in_progress', 'completed'].includes(t.status)).length,
+          rejected: updated.filter((t) => t.status === 'rejected').length,
+          ambiguous: updated.filter((t) => t.owner_ambiguous).length,
+        });
+        return updated;
+      });
 
       // Re-sync edit buffer
       setTaskEdits((prev) => ({
@@ -137,12 +146,6 @@ export const MeetingReviewPage = () => {
           owner_id: res.task.owner_id ? String(res.task.owner_id) : '',
           isDirty: false,
         },
-      }));
-
-      // Update stats
-      setStats((prev) => ({
-        ...prev,
-        ambiguous: tasks.filter((t) => (t.id === taskId ? false : t.owner_ambiguous)).length,
       }));
 
       showNotification('Task owner assigned and ambiguity resolved.', 'success');
@@ -916,16 +919,19 @@ export const MeetingReviewPage = () => {
               <div className="p-4 rounded-xl bg-slate-950/90 border border-slate-800/80 text-xs text-slate-200 font-mono leading-relaxed whitespace-pre-wrap selection:bg-indigo-500 selection:text-white">
                 {meeting.transcript ? (
                   transcriptSearch ? (
-                    // Simple highlighting for search terms
-                    meeting.transcript.split(new RegExp(`(${transcriptSearch})`, 'gi')).map((part, i) =>
-                      part.toLowerCase() === transcriptSearch.toLowerCase() ? (
-                        <mark key={i} className="bg-amber-400 text-slate-950 font-bold px-0.5 rounded">
-                          {part}
-                        </mark>
-                      ) : (
-                        <span key={i}>{part}</span>
-                      )
-                    )
+                    // Simple highlighting for search terms (escape regex special chars to prevent crash)
+                    (() => {
+                      const escaped = transcriptSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                      return meeting.transcript.split(new RegExp(`(${escaped})`, 'gi')).map((part, i) =>
+                        part.toLowerCase() === transcriptSearch.toLowerCase() ? (
+                          <mark key={i} className="bg-amber-400 text-slate-950 font-bold px-0.5 rounded">
+                            {part}
+                          </mark>
+                        ) : (
+                          <span key={i}>{part}</span>
+                        )
+                      );
+                    })()
                   ) : highlightedSourceText && meeting.transcript.includes(highlightedSourceText) ? (
                     // Highlight active hovered card source text
                     meeting.transcript.split(highlightedSourceText).map((part, i, arr) => (

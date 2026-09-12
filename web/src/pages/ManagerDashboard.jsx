@@ -594,7 +594,7 @@ export const ManagerDashboard = () => {
             </div>
             <h1 className="text-2xl font-bold text-white mt-1">Team Dashboard</h1>
             <p className="text-sm text-slate-400 mt-1">
-              Direct reports under {user?.name}: Ahmed Raza, Sarah Khan, Ali Khan, and Ali Raza.
+              Direct reports under {user?.name}{directReports.length > 0 ? `: ${directReports.map(r => r.name).join(', ')}.` : '.'}
             </p>
           </div>
           <div className="flex items-center gap-3">
