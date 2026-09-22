@@ -26,6 +26,11 @@ class User extends Authenticatable
         'manager_id',
         'status',
         'is_active',
+        'password_changed_at',
+        'must_change_password',
+        'failed_login_count',
+        'locked_until',
+        'mfa_enabled_at',
     ];
 
     protected $hidden = [
@@ -36,6 +41,11 @@ class User extends Authenticatable
     protected $casts = [
         'password' => 'hashed',
         'is_active' => 'boolean',
+        'password_changed_at' => 'datetime',
+        'must_change_password' => 'boolean',
+        'failed_login_count' => 'integer',
+        'locked_until' => 'datetime',
+        'mfa_enabled_at' => 'datetime',
     ];
 
     /**
@@ -100,6 +110,67 @@ class User extends Authenticatable
     public function comments(): HasMany
     {
         return $this->hasMany(TaskComment::class, 'user_id');
+    }
+
+    /**
+     * Audit log of login and auth events for this user.
+     */
+    public function loginEvents(): HasMany
+    {
+        return $this->hasMany(LoginEvent::class, 'user_id');
+    }
+
+    /**
+     * Determine if the user account is temporarily locked.
+     */
+    public function isLocked(): bool
+    {
+        return !is_null($this->locked_until) && $this->locked_until->isFuture();
+    }
+
+    /**
+     * Increment failed login attempts and lock out if threshold reached.
+     */
+    public function incrementFailedLogins(?\Illuminate\Http\Request $request = null): void
+    {
+        $this->failed_login_count = ($this->failed_login_count ?? 0) + 1;
+
+        if ($this->failed_login_count >= 5) {
+            $this->locked_until = now()->addMinutes(15);
+            $this->save();
+
+            LoginEvent::record(
+                'locked_out',
+                $this->email,
+                $this->id,
+                $this->org_id,
+                $request,
+                ['failed_login_count' => $this->failed_login_count, 'locked_until' => $this->locked_until->toIso8601String()]
+            );
+        } else {
+            $this->save();
+
+            LoginEvent::record(
+                'login_failed',
+                $this->email,
+                $this->id,
+                $this->org_id,
+                $request,
+                ['failed_login_count' => $this->failed_login_count]
+            );
+        }
+    }
+
+    /**
+     * Reset the failed login counter and lockout timestamp.
+     */
+    public function resetFailedLogins(): void
+    {
+        if ($this->failed_login_count > 0 || !is_null($this->locked_until)) {
+            $this->failed_login_count = 0;
+            $this->locked_until = null;
+            $this->save();
+        }
     }
 
     // Role helper methods

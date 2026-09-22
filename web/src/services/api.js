@@ -95,6 +95,33 @@ export const authApi = {
     const response = await api.get('/api/auth/me');
     return response.data;
   },
+
+  // Request password reset email
+  forgotPassword: async (email) => {
+    const response = await api.post('/api/auth/forgot-password', { email });
+    return response.data;
+  },
+
+  // Complete password reset with token
+  resetPassword: async (email, token, password, password_confirmation) => {
+    const response = await api.post('/api/auth/reset-password', {
+      email,
+      token,
+      password,
+      password_confirmation,
+    });
+    return response.data;
+  },
+
+  // Authenticated password change
+  changePassword: async (current_password, password, password_confirmation) => {
+    const response = await api.post('/api/auth/change-password', {
+      current_password,
+      password,
+      password_confirmation,
+    });
+    return response.data;
+  },
 };
 
 export const myTasksApi = {
