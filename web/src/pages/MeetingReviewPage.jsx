@@ -76,7 +76,9 @@ export const MeetingReviewPage = () => {
           owner_id: t.owner_id ? String(t.owner_id) : '',
           due_date: t.due_date || '',
           priority: t.priority || 'medium',
-          conditional: t.conditional || false,
+          conditional: Boolean(t.conditional),
+          conditional_ack: Boolean(t.conditional_ack),
+          no_deadline_ack: Boolean(t.no_deadline_ack),
           isDirty: false,
         };
       });
@@ -110,33 +112,26 @@ export const MeetingReviewPage = () => {
     });
   };
 
-  // Actively selecting an owner immediately saves and clears ambiguity
+  // Actively selecting an owner immediately saves and updates eligibility
   const handleOwnerSelect = async (taskId, selectedOwnerId) => {
-    const numericOwnerId = selectedOwnerId ? parseInt(selectedOwnerId, 10) : null;
+    const numericOwnerId = (selectedOwnerId && !isNaN(parseInt(selectedOwnerId, 10)))
+      ? parseInt(selectedOwnerId, 10)
+      : null;
     
     // Update local state first
-    handleFieldChange(taskId, 'owner_id', selectedOwnerId);
+    handleFieldChange(taskId, 'owner_id', selectedOwnerId || '');
 
-    // Save to backend immediately so the ambiguous flag clears and Approve is unlocked
+    // Save to backend immediately so the ambiguous/missing flag clears and Approve is unlocked
     try {
       setSavingTaskId(taskId);
       const res = await meetingApi.updateTask(taskId, {
         owner_id: numericOwnerId,
       });
 
-      // Update task in state and recompute stats from the updated list
-      setTasks((prev) => {
-        const updated = prev.map((t) => (t.id === taskId ? { ...t, ...res.task } : t));
-        // Recompute stats from the fresh updated list (avoids stale closure)
-        setStats({
-          total: updated.length,
-          pending: updated.filter((t) => ['pending_approval', 'detected'].includes(t.status)).length,
-          approved: updated.filter((t) => ['approved', 'assigned', 'in_progress', 'completed'].includes(t.status)).length,
-          rejected: updated.filter((t) => t.status === 'rejected').length,
-          ambiguous: updated.filter((t) => t.owner_ambiguous).length,
-        });
-        return updated;
-      });
+      // Update task in state with backend-evaluated eligibility
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, ...res.task } : t))
+      );
 
       // Re-sync edit buffer
       setTaskEdits((prev) => ({
@@ -148,10 +143,54 @@ export const MeetingReviewPage = () => {
         },
       }));
 
-      showNotification('Task owner assigned and ambiguity resolved.', 'success');
+      // Refresh review summary stats from server
+      try {
+        const summary = await meetingApi.getReviewSummary(id);
+        setStats((prev) => ({ ...prev, ...summary }));
+      } catch {
+        // Fallback: local recalculation
+      }
+
+      showNotification('Task owner assigned and eligibility updated.', 'success');
     } catch (err) {
       console.error('Failed to assign owner:', err);
       showNotification(err.apiError?.message || 'Failed to assign owner.', 'error');
+    } finally {
+      setSavingTaskId(null);
+    }
+  };
+
+  // Immediate toggle for acknowledgements (conditional_ack, no_deadline_ack)
+  const handleToggleAck = async (taskId, field, value) => {
+    try {
+      setSavingTaskId(taskId);
+      const res = await meetingApi.updateTask(taskId, {
+        [field]: value,
+      });
+
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, ...res.task } : t))
+      );
+
+      setTaskEdits((prev) => ({
+        ...prev,
+        [taskId]: {
+          ...prev[taskId],
+          [field]: value,
+        },
+      }));
+
+      try {
+        const summary = await meetingApi.getReviewSummary(id);
+        setStats((prev) => ({ ...prev, ...summary }));
+      } catch {
+        // Fallback
+      }
+
+      showNotification('Requirement acknowledgement updated.', 'success');
+    } catch (err) {
+      console.error('Failed to update acknowledgement:', err);
+      showNotification(err.apiError?.message || 'Failed to update requirement acknowledgement.', 'error');
     } finally {
       setSavingTaskId(null);
     }
@@ -172,9 +211,10 @@ export const MeetingReviewPage = () => {
         conditional: edit.conditional,
       };
 
-      // Only include owner_id if user actually changed it
-      if (edit.owner_id) {
+      if (edit.owner_id && !isNaN(parseInt(edit.owner_id, 10))) {
         payload.owner_id = parseInt(edit.owner_id, 10);
+      } else if (edit.owner_id === '') {
+        payload.owner_id = null;
       }
 
       const res = await meetingApi.updateTask(taskId, payload);
@@ -191,6 +231,13 @@ export const MeetingReviewPage = () => {
         },
       }));
 
+      try {
+        const summary = await meetingApi.getReviewSummary(id);
+        setStats((prev) => ({ ...prev, ...summary }));
+      } catch {
+        // Fallback
+      }
+
       showNotification('Task changes saved successfully.', 'success');
     } catch (err) {
       console.error('Failed to save task:', err);
@@ -204,10 +251,9 @@ export const MeetingReviewPage = () => {
   const handleApproveTask = async (task) => {
     const edit = taskEdits[task.id];
     
-    // Check if task is ambiguous or missing owner
-    const currentOwnerId = edit?.owner_id || task.owner_id;
-    if (task.owner_ambiguous && !currentOwnerId) {
-      showNotification('Cannot approve task with an ambiguous or unresolved owner. Please select an owner first.', 'error');
+    // Check if task is eligible
+    if (task.eligibility && !task.eligibility.eligible) {
+      showNotification(`Cannot approve: ${task.eligibility.reason || 'Approval requirements not met.'}`, 'error');
       return;
     }
 
@@ -222,7 +268,7 @@ export const MeetingReviewPage = () => {
           due_date: edit.due_date || null,
           priority: edit.priority,
           conditional: edit.conditional,
-          ...(edit.owner_id ? { owner_id: parseInt(edit.owner_id, 10) } : {}),
+          ...(edit.owner_id && !isNaN(parseInt(edit.owner_id, 10)) ? { owner_id: parseInt(edit.owner_id, 10) } : {}),
         });
       }
 
@@ -236,15 +282,13 @@ export const MeetingReviewPage = () => {
         setMeeting((prev) => ({ ...prev, status: res.meeting_status }));
       }
 
-      // Update stats
-      const updatedTasks = tasks.map((t) => (t.id === task.id ? { ...t, ...res.task } : t));
-      setStats({
-        total: updatedTasks.length,
-        pending: updatedTasks.filter((t) => ['pending_approval', 'detected'].includes(t.status)).length,
-        approved: updatedTasks.filter((t) => ['approved', 'assigned', 'in_progress', 'completed'].includes(t.status)).length,
-        rejected: updatedTasks.filter((t) => t.status === 'rejected').length,
-        ambiguous: updatedTasks.filter((t) => t.owner_ambiguous).length,
-      });
+      // Refresh stats from backend
+      try {
+        const summary = await meetingApi.getReviewSummary(id);
+        setStats((prev) => ({ ...prev, ...summary }));
+      } catch {
+        // Fallback
+      }
 
       if (res.is_meeting_resolved) {
         showNotification('All tasks resolved! Meeting reviewed & outbound webhook fired.', 'success');
@@ -276,15 +320,12 @@ export const MeetingReviewPage = () => {
         setMeeting((prev) => ({ ...prev, status: res.meeting_status }));
       }
 
-      // Update stats
-      const updatedTasks = tasks.map((t) => (t.id === task.id ? { ...t, ...res.task } : t));
-      setStats({
-        total: updatedTasks.length,
-        pending: updatedTasks.filter((t) => ['pending_approval', 'detected'].includes(t.status)).length,
-        approved: updatedTasks.filter((t) => ['approved', 'assigned', 'in_progress', 'completed'].includes(t.status)).length,
-        rejected: updatedTasks.filter((t) => t.status === 'rejected').length,
-        ambiguous: updatedTasks.filter((t) => t.owner_ambiguous).length,
-      });
+      try {
+        const summary = await meetingApi.getReviewSummary(id);
+        setStats((prev) => ({ ...prev, ...summary }));
+      } catch {
+        // Fallback
+      }
 
       showNotification(`Task "${task.title}" rejected.`, 'info');
     } catch (err) {
@@ -295,7 +336,7 @@ export const MeetingReviewPage = () => {
     }
   };
 
-  // Bulk Approve All (skips any card missing an owner or marked ambiguous)
+  // Bulk Approve All (strictly approves eligible tasks and skips ineligible cards)
   const handleApproveAll = async () => {
     try {
       setIsApprovingAll(true);
@@ -308,19 +349,16 @@ export const MeetingReviewPage = () => {
         setMeeting((prev) => ({ ...prev, status: res.meeting_status }));
       }
 
-      // Update stats
-      const updatedTasks = res.tasks || tasks;
-      setStats({
-        total: updatedTasks.length,
-        pending: updatedTasks.filter((t) => ['pending_approval', 'detected'].includes(t.status)).length,
-        approved: updatedTasks.filter((t) => ['approved', 'assigned', 'in_progress', 'completed'].includes(t.status)).length,
-        rejected: updatedTasks.filter((t) => t.status === 'rejected').length,
-        ambiguous: updatedTasks.filter((t) => t.owner_ambiguous).length,
-      });
+      try {
+        const summary = await meetingApi.getReviewSummary(id);
+        setStats((prev) => ({ ...prev, ...summary }));
+      } catch {
+        // Fallback
+      }
 
       if (res.skipped_count > 0) {
         showNotification(
-          `Approved ${res.approved_count} tasks. Skipped ${res.skipped_count} card(s) missing a required owner.`,
+          `Approved ${res.approved_count} task(s). Skipped ${res.skipped_count} card(s) that require review or an assigned owner.`,
           'info'
         );
       } else {
@@ -337,23 +375,29 @@ export const MeetingReviewPage = () => {
   // Filter tasks for list view
   const filteredTasks = useMemo(() => {
     return tasks.filter((task) => {
-      if (activeFilter === 'pending') return ['pending_approval', 'detected'].includes(task.status);
+      const isPending = ['pending_approval', 'detected'].includes(task.status);
+      if (activeFilter === 'pending') return isPending;
+      if (activeFilter === 'eligible') return isPending && (task.eligibility ? task.eligibility.eligible : true);
+      if (activeFilter === 'needs_attention') return isPending && (task.eligibility ? !task.eligibility.eligible : false);
       if (activeFilter === 'approved') return ['approved', 'assigned', 'in_progress', 'completed'].includes(task.status);
       if (activeFilter === 'rejected') return task.status === 'rejected';
-      if (activeFilter === 'ambiguous') return task.owner_ambiguous || (!task.owner_id && task.status === 'pending_approval');
+      if (activeFilter === 'ambiguous') return task.owner_ambiguous || task.owner_state === 'ambiguous' || (!task.owner_id && isPending);
       return true;
     });
   }, [tasks, activeFilter]);
 
   // Ambiguous count for banner alert
   const ambiguousCount = useMemo(() => {
-    return tasks.filter((t) => t.owner_ambiguous || (!t.owner_id && t.status === 'pending_approval')).length;
+    return tasks.filter((t) => ['pending_approval', 'detected'].includes(t.status) && (t.owner_ambiguous || t.owner_state === 'ambiguous')).length;
   }, [tasks]);
 
   // Pending eligible count for Approve All
   const eligibleToApproveCount = useMemo(() => {
-    return tasks.filter((t) => ['pending_approval', 'detected'].includes(t.status) && !t.owner_ambiguous && t.owner_id).length;
-  }, [tasks]);
+    if (typeof stats.eligible === 'number') {
+      return stats.eligible;
+    }
+    return tasks.filter((t) => ['pending_approval', 'detected'].includes(t.status) && t.eligibility?.eligible).length;
+  }, [tasks, stats.eligible]);
 
   if (loading) {
     return (
@@ -451,25 +495,24 @@ export const MeetingReviewPage = () => {
           <div className="flex items-center gap-3 self-start lg:self-center">
             <button
               onClick={handleApproveAll}
-              disabled={isApprovingAll || stats.pending === 0}
+              disabled={isApprovingAll || eligibleToApproveCount === 0}
               className={`px-5 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 shadow-lg transition-all ${
-                stats.pending === 0
+                eligibleToApproveCount === 0 || isApprovingAll
                   ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/50'
                   : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-600/30 ring-1 ring-white/20 active:scale-95'
               }`}
-              title={ambiguousCount > 0 ? `Approves ${eligibleToApproveCount} tasks; skips ${ambiguousCount} ambiguous card(s)` : 'Approve all pending tasks'}
+              title={
+                eligibleToApproveCount > 0
+                  ? `Approves ${eligibleToApproveCount} eligible task(s)`
+                  : 'No eligible tasks to approve'
+              }
             >
               {isApprovingAll ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <CheckCheck className="w-4 h-4" />
               )}
-              <span>Approve All Eligible</span>
-              {eligibleToApproveCount > 0 && (
-                <span className="px-1.5 py-0.5 rounded-md bg-emerald-950 text-emerald-200 text-xs font-mono font-bold">
-                  {eligibleToApproveCount}
-                </span>
-              )}
+              <span>Approve All Eligible ({eligibleToApproveCount})</span>
             </button>
           </div>
         </div>
@@ -479,16 +522,16 @@ export const MeetingReviewPage = () => {
           <div className="p-3.5 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-200 flex items-start gap-3 text-xs">
             <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold text-rose-300">Action Required: {ambiguousCount} task(s) have an ambiguous owner.</span>
+              <span className="font-bold text-rose-300">Action Required: {ambiguousCount} task(s) have an ambiguous or missing owner.</span>
               <p className="text-rose-300/80 mt-0.5">
-                The AI detected a name with multiple roster matches (e.g. "Ali"). The <strong>Approve</strong> button is disabled for these cards until you select the intended assignee from the dropdown. "Approve All" will automatically skip these tasks until resolved.
+                The AI detected a name with multiple roster matches or unresolved owner. The <strong>Approve</strong> button is disabled for these cards until you select the intended assignee from the dropdown. "Approve All Eligible" will automatically skip these tasks until resolved.
               </p>
             </div>
           </div>
         )}
 
         {/* Statistics Bar */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-2 border-t border-slate-800/60">
+        <div className="grid grid-cols-2 sm:grid-cols-6 gap-3 pt-2 border-t border-slate-800/60">
           <button
             onClick={() => setActiveFilter('all')}
             className={`p-2.5 rounded-xl border text-left transition-all ${
@@ -498,7 +541,7 @@ export const MeetingReviewPage = () => {
             }`}
           >
             <div className="text-[11px] font-medium uppercase tracking-wider">Total Tasks</div>
-            <div className="text-xl font-bold text-white mt-0.5">{stats.total}</div>
+            <div className="text-xl font-bold text-white mt-0.5">{stats.total ?? tasks.length}</div>
           </button>
 
           <button
@@ -510,34 +553,53 @@ export const MeetingReviewPage = () => {
             }`}
           >
             <div className="text-[11px] font-medium uppercase tracking-wider">Pending Review</div>
-            <div className="text-xl font-bold text-amber-400 mt-0.5">{stats.pending}</div>
+            <div className="text-xl font-bold text-amber-400 mt-0.5">{stats.pending ?? 0}</div>
           </button>
 
           <button
-            onClick={() => setActiveFilter('ambiguous')}
+            onClick={() => setActiveFilter('eligible')}
             className={`p-2.5 rounded-xl border text-left transition-all ${
-              activeFilter === 'ambiguous'
+              activeFilter === 'eligible'
+                ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-200 ring-1 ring-emerald-500/30'
+                : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
+            }`}
+          >
+            <div className="text-[11px] font-medium uppercase tracking-wider flex items-center justify-between">
+              <span>Ready / Eligible</span>
+              {eligibleToApproveCount > 0 && <span className="w-2 h-2 rounded-full bg-emerald-500" />}
+            </div>
+            <div className="text-xl font-bold text-emerald-400 mt-0.5">{eligibleToApproveCount}</div>
+          </button>
+
+          <button
+            onClick={() => setActiveFilter('needs_attention')}
+            className={`p-2.5 rounded-xl border text-left transition-all ${
+              activeFilter === 'needs_attention'
                 ? 'bg-rose-600/20 border-rose-500/50 text-rose-200 ring-1 ring-rose-500/30'
                 : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             }`}
           >
             <div className="text-[11px] font-medium uppercase tracking-wider flex items-center justify-between">
-              <span>Ambiguous Owner</span>
-              {stats.ambiguous > 0 && <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />}
+              <span>Needs Attention</span>
+              {(stats.needs_owner || 0) + (stats.ambiguous_owner || 0) > 0 && (
+                <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+              )}
             </div>
-            <div className="text-xl font-bold text-rose-400 mt-0.5">{stats.ambiguous}</div>
+            <div className="text-xl font-bold text-rose-400 mt-0.5">
+              {(stats.needs_owner || 0) + (stats.ambiguous_owner || 0) || ambiguousCount}
+            </div>
           </button>
 
           <button
             onClick={() => setActiveFilter('approved')}
             className={`p-2.5 rounded-xl border text-left transition-all ${
               activeFilter === 'approved'
-                ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-200 ring-1 ring-emerald-500/30'
+                ? 'bg-teal-600/20 border-teal-500/50 text-teal-200 ring-1 ring-teal-500/30'
                 : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
             }`}
           >
             <div className="text-[11px] font-medium uppercase tracking-wider">Approved</div>
-            <div className="text-xl font-bold text-emerald-400 mt-0.5">{stats.approved}</div>
+            <div className="text-xl font-bold text-teal-400 mt-0.5">{stats.approved ?? 0}</div>
           </button>
 
           <button
@@ -549,7 +611,7 @@ export const MeetingReviewPage = () => {
             }`}
           >
             <div className="text-[11px] font-medium uppercase tracking-wider">Rejected</div>
-            <div className="text-xl font-bold text-slate-400 mt-0.5">{stats.rejected}</div>
+            <div className="text-xl font-bold text-slate-400 mt-0.5">{stats.rejected ?? 0}</div>
           </button>
         </div>
       </div>
@@ -592,19 +654,22 @@ export const MeetingReviewPage = () => {
                 owner_id: task.owner_id ? String(task.owner_id) : '',
                 due_date: task.due_date || '',
                 priority: task.priority || 'medium',
-                conditional: task.conditional || false,
+                conditional: Boolean(task.conditional),
+                conditional_ack: Boolean(task.conditional_ack),
+                no_deadline_ack: Boolean(task.no_deadline_ack),
                 isDirty: false,
               };
 
-              const isAmbiguous = task.owner_ambiguous;
+              const isAmbiguous = task.owner_ambiguous || task.owner_state === 'ambiguous';
+              const isUnmatched = task.owner_state === 'unmatched';
               const isLowDeadlineConfidence = task.deadline_confidence !== null && task.deadline_confidence < 0.7;
               const isConditional = Boolean(task.conditional);
               const isApproved = ['approved', 'assigned', 'in_progress', 'completed'].includes(task.status);
               const isRejected = task.status === 'rejected';
               const isPending = ['pending_approval', 'detected'].includes(task.status);
-
-              // Approve disabled if ambiguous or missing owner
-              const canApprove = isPending && !isAmbiguous && (Boolean(edit.owner_id) || Boolean(task.owner_id));
+              const isEligible = Boolean(task.eligibility?.eligible);
+              const blockers = task.eligibility?.blockers || [];
+              const canApprove = isPending && isEligible;
 
               return (
                 <div
@@ -612,13 +677,15 @@ export const MeetingReviewPage = () => {
                   onMouseEnter={() => setHighlightedSourceText(task.source_text)}
                   onMouseLeave={() => setHighlightedSourceText(null)}
                   className={`rounded-2xl transition-all p-5 space-y-4 ${
-                    isAmbiguous
+                    isAmbiguous || isUnmatched
                       ? 'border-2 border-rose-500/90 bg-gradient-to-b from-rose-950/30 via-slate-900/90 to-slate-900/70 shadow-xl shadow-rose-950/30 ring-1 ring-rose-500/40'
                       : isApproved
                       ? 'border border-emerald-500/40 bg-slate-900/60 opacity-90'
                       : isRejected
                       ? 'border border-slate-800 bg-slate-950/60 opacity-60'
-                      : 'glass-card border-slate-800/80 hover:border-slate-700 shadow-md'
+                      : isEligible
+                      ? 'glass-card border-emerald-500/30 hover:border-emerald-500/50 shadow-md'
+                      : 'glass-card border-amber-500/40 hover:border-amber-500/60 shadow-md'
                   }`}
                 >
                   {/* Card Header & Flags */}
@@ -636,11 +703,34 @@ export const MeetingReviewPage = () => {
                         </span>
                       )}
 
+                      {/* Unmatched Owner Badge */}
+                      {isUnmatched && (
+                        <span className="px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/50 flex items-center gap-1.5 shadow-sm shadow-rose-950">
+                          <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                          Unmatched Owner ({task.owner_name_raw || 'Unknown'})
+                        </span>
+                      )}
+
                       {/* Conditional Badge */}
                       {isConditional && (
                         <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-500/20 text-purple-300 border border-purple-500/40 flex items-center gap-1">
                           <HelpCircle className="w-3 h-3 text-purple-400" />
                           Conditional
+                        </span>
+                      )}
+
+                      {/* Readiness Badges */}
+                      {isPending && isEligible && (
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1">
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          Ready for Approval
+                        </span>
+                      )}
+
+                      {isPending && !isEligible && (
+                        <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
+                          <AlertCircle className="w-3 h-3 text-amber-400" />
+                          Action Required
                         </span>
                       )}
 
@@ -717,7 +807,7 @@ export const MeetingReviewPage = () => {
                     <div className="space-y-1">
                       <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
                         <span>Assignee / Owner</span>
-                        {isAmbiguous && (
+                        {(isAmbiguous || isUnmatched || !edit.owner_id) && (
                           <span className="text-[10px] text-rose-400 font-bold">Required</span>
                         )}
                       </label>
@@ -727,13 +817,17 @@ export const MeetingReviewPage = () => {
                           value={edit.owner_id}
                           onChange={(e) => handleOwnerSelect(task.id, e.target.value)}
                           className={`w-full px-3 py-2 rounded-xl text-xs font-medium focus:outline-none transition-all cursor-pointer ${
-                            isAmbiguous
+                            isAmbiguous || isUnmatched
                               ? 'bg-rose-950/50 border-2 border-rose-500 text-rose-100 font-semibold focus:border-rose-400 focus:ring-2 focus:ring-rose-500/40'
                               : 'bg-slate-950/60 border border-slate-700/80 text-slate-200 focus:border-indigo-500'
                           }`}
                         >
                           <option value="" className="bg-slate-900 text-slate-500">
-                            {isAmbiguous ? '⚠️ Select owner to resolve ambiguity...' : 'Select an owner...'}
+                            {isAmbiguous
+                              ? '⚠️ Ambiguous owner: select intended assignee...'
+                              : isUnmatched
+                              ? '⚠️ Unmatched owner: select assignee...'
+                              : 'Select an owner...'}
                           </option>
                           {orgUsers.map((u) => (
                             <option key={u.id} value={u.id} className="bg-slate-900 text-slate-200">
@@ -743,12 +837,20 @@ export const MeetingReviewPage = () => {
                         </select>
                       </div>
 
-                      {/* Ambiguous Owner Hint */}
+                      {/* Ambiguous or Unmatched Owner Hint */}
                       {isAmbiguous && (
                         <div className="text-[11px] text-rose-300 font-medium flex items-center gap-1.5 pt-0.5">
                           <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
                           <span>
-                            AI heard <strong>"{task.owner_name_raw || 'Ali'}"</strong> — multiple matches in company roster.
+                            AI heard <strong>"{task.owner_name_raw || 'Ali'}"</strong> — multiple roster matches. Please select intended assignee.
+                          </span>
+                        </div>
+                      )}
+                      {isUnmatched && (
+                        <div className="text-[11px] text-rose-300 font-medium flex items-center gap-1.5 pt-0.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          <span>
+                            AI heard <strong>"{task.owner_name_raw}"</strong> — no roster match found.
                           </span>
                         </div>
                       )}
@@ -785,6 +887,61 @@ export const MeetingReviewPage = () => {
                       )}
                     </div>
                   </div>
+
+                  {/* Inline Blockers & Acknowledgements Box */}
+                  {isPending && !isEligible && (
+                    <div className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/40 text-xs space-y-2">
+                      <div className="flex items-center gap-1.5 font-bold text-amber-300">
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>Approval Requirements</span>
+                      </div>
+                      <div className="space-y-1.5 pl-5">
+                        {blockers.includes('OWNER_REQUIRED') && (
+                          <p className="text-amber-200">• Assignee missing: Select a team member from the dropdown above.</p>
+                        )}
+                        {blockers.includes('OWNER_AMBIGUOUS') && (
+                          <p className="text-rose-300 font-semibold">• Ambiguous owner: Select the intended person from the dropdown.</p>
+                        )}
+                        {blockers.includes('OWNER_NOT_IN_ORG') && (
+                          <p className="text-rose-300">• Selected owner is not a member of this organization.</p>
+                        )}
+                        {blockers.includes('OWNER_INACTIVE') && (
+                          <p className="text-rose-300">• Selected owner account is deactivated. Please reassign.</p>
+                        )}
+                        {blockers.includes('TITLE_REQUIRED') && (
+                          <p className="text-rose-300">• Task title cannot be empty.</p>
+                        )}
+                        {blockers.includes('CONDITIONAL_UNACKNOWLEDGED') && (
+                          <div className="flex items-center gap-2 pt-1 text-purple-300 font-medium">
+                            <input
+                              type="checkbox"
+                              id={`cond-ack-${task.id}`}
+                              checked={Boolean(task.conditional_ack)}
+                              onChange={(e) => handleToggleAck(task.id, 'conditional_ack', e.target.checked)}
+                              className="rounded border-purple-500/50 bg-slate-900 text-purple-600 focus:ring-purple-500 cursor-pointer"
+                            />
+                            <label htmlFor={`cond-ack-${task.id}`} className="cursor-pointer">
+                              Acknowledge conditional item (unblocks approval)
+                            </label>
+                          </div>
+                        )}
+                        {blockers.includes('NO_DEADLINE_UNACKNOWLEDGED') && (
+                          <div className="flex items-center gap-2 pt-1 text-amber-300 font-medium">
+                            <input
+                              type="checkbox"
+                              id={`nodeadline-ack-${task.id}`}
+                              checked={Boolean(task.no_deadline_ack)}
+                              onChange={(e) => handleToggleAck(task.id, 'no_deadline_ack', e.target.checked)}
+                              className="rounded border-amber-500/50 bg-slate-900 text-amber-600 focus:ring-amber-500 cursor-pointer"
+                            />
+                            <label htmlFor={`nodeadline-ack-${task.id}`} className="cursor-pointer">
+                              Acknowledge task has no deadline (unblocks approval)
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {/* source_text Block — Exactly beneath each card */}
                   {task.source_text && (
@@ -845,11 +1002,9 @@ export const MeetingReviewPage = () => {
                                 : 'bg-slate-800/80 text-slate-500 border border-slate-700/50 cursor-not-allowed'
                             }`}
                             title={
-                              isAmbiguous
-                                ? 'Approve disabled: select an owner from the dropdown first'
-                                : !edit.owner_id
-                                ? 'Approve disabled: task has no assigned owner'
-                                : 'Approve and assign this task'
+                              canApprove
+                                ? 'Approve and assign this task'
+                                : task.eligibility?.reason || 'Approval requirements not met'
                             }
                           >
                             {approvingTaskId === task.id ? (
@@ -857,7 +1012,7 @@ export const MeetingReviewPage = () => {
                             ) : (
                               <Check className="w-3.5 h-3.5" />
                             )}
-                            <span>{isAmbiguous ? 'Owner Required to Approve' : 'Approve'}</span>
+                            <span>{canApprove ? 'Approve' : (task.eligibility?.reason ? 'Blocked' : 'Ineligible')}</span>
                           </button>
                         </>
                       )}

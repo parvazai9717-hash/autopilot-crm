@@ -33,7 +33,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // Meeting Review & Management
     Route::get('/meetings/{id}', [App\Http\Controllers\Api\ReviewController::class, 'show']);
     Route::get('/meetings/{id}/review', [App\Http\Controllers\Api\ReviewController::class, 'show']);
+    Route::get('/meetings/{id}/review-summary', [App\Http\Controllers\Api\ReviewController::class, 'reviewSummary']);
     Route::post('/meetings/{id}/approve-all', [App\Http\Controllers\Api\ReviewController::class, 'approveAll']);
+    Route::post('/meetings/{id}/approve-eligible', [App\Http\Controllers\Api\ReviewController::class, 'approveAll']);
 
     // Task Actions (Review Screen)
     Route::patch('/tasks/{id}', [App\Http\Controllers\Api\ReviewController::class, 'updateTask']);

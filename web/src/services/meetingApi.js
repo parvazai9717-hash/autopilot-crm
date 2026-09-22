@@ -31,6 +31,12 @@ export const meetingApi = {
     return response.data;
   },
 
+  // Fetch review summary gate counters
+  getReviewSummary: async (meetingId) => {
+    const response = await api.get(`/api/meetings/${meetingId}/review-summary`);
+    return response.data;
+  },
+
   // Create meeting from pasted transcript (Admin)
   createTranscriptMeeting: async (payload) => {
     const response = await api.post('/api/meetings', payload);

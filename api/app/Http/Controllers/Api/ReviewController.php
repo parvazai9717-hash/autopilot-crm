@@ -7,6 +7,7 @@ use App\Models\Meeting;
 use App\Models\Task;
 use App\Models\TaskEvent;
 use App\Models\User;
+use App\Services\ActionItemEligibility;
 use App\Services\TaskStateMachine;
 use App\Services\WebhookService;
 use App\Support\ApiResponse;
@@ -58,12 +59,48 @@ class ReviewController extends Controller
             ->orderBy('name', 'asc')
             ->get();
 
+        $pending = $tasks->filter(fn (Task $t) => in_array($t->status, ['pending_approval', 'detected'], true));
+
+        $eligibleCount = 0;
+        $needsOwnerCount = 0;
+        $ambiguousCount = 0;
+        $unmatchedCount = 0;
+        $conditionalCount = 0;
+        $missingDeadlineCount = 0;
+
+        foreach ($pending as $task) {
+            $eligibility = ActionItemEligibility::evaluate($task);
+            if ($eligibility['eligible']) {
+                $eligibleCount++;
+            }
+            if (in_array(ActionItemEligibility::OWNER_REQUIRED, $eligibility['blockers'], true)) {
+                $needsOwnerCount++;
+            }
+            if (in_array(ActionItemEligibility::OWNER_AMBIGUOUS, $eligibility['blockers'], true)) {
+                $ambiguousCount++;
+            }
+            if ($task->owner_state === 'unmatched') {
+                $unmatchedCount++;
+            }
+            if ($task->conditional && !$task->conditional_ack) {
+                $conditionalCount++;
+            }
+            if (empty($task->due_date) && !$task->no_deadline_ack) {
+                $missingDeadlineCount++;
+            }
+        }
+
         $stats = [
-            'total' => $tasks->count(),
-            'pending' => $tasks->whereIn('status', ['pending_approval', 'detected'])->count(),
-            'approved' => $tasks->whereIn('status', ['approved', 'assigned', 'in_progress', 'completed'])->count(),
-            'rejected' => $tasks->where('status', 'rejected')->count(),
-            'ambiguous' => $tasks->where('owner_ambiguous', true)->count(),
+            'total'            => $tasks->count(),
+            'pending'          => $pending->count(),
+            'approved'         => $tasks->whereIn('status', ['approved', 'assigned', 'in_progress', 'completed'])->count(),
+            'rejected'         => $tasks->where('status', 'rejected')->count(),
+            'ambiguous'        => $ambiguousCount,
+            'eligible'         => $eligibleCount,
+            'needs_owner'      => $needsOwnerCount,
+            'unmatched_owner'  => $unmatchedCount,
+            'conditional'      => $conditionalCount,
+            'missing_deadline' => $missingDeadlineCount,
         ];
 
         return response()->json([
@@ -89,6 +126,80 @@ class ReviewController extends Controller
             'tasks' => $tasks->map(fn (Task $t) => $this->formatTask($t)),
             'users' => $users,
             'stats' => $stats,
+        ]);
+    }
+
+    /**
+     * GET /api/meetings/{id}/review-summary
+     * Detailed breakdown of review gate counters.
+     */
+    public function reviewSummary(Request $request, int $id): JsonResponse
+    {
+        $user = $request->user();
+
+        $meeting = Meeting::withoutGlobalScopes()->find($id);
+
+        if (!$meeting || $meeting->org_id !== $user->org_id) {
+            return ApiResponse::error(
+                'NOT_FOUND',
+                'Meeting not found.',
+                404
+            );
+        }
+
+        if (!$user->can('review', $meeting)) {
+            return ApiResponse::error(
+                'FORBIDDEN',
+                'You do not have permission to review this meeting.',
+                403
+            );
+        }
+
+        $tasks = Task::withoutGlobalScopes()
+            ->where('meeting_id', $id)
+            ->with(['owner'])
+            ->get();
+
+        $pending = $tasks->filter(fn (Task $t) => in_array($t->status, ['pending_approval', 'detected'], true));
+
+        $eligibleCount = 0;
+        $needsOwnerCount = 0;
+        $ambiguousCount = 0;
+        $unmatchedCount = 0;
+        $conditionalCount = 0;
+        $missingDeadlineCount = 0;
+
+        foreach ($pending as $task) {
+            $eligibility = ActionItemEligibility::evaluate($task);
+            if ($eligibility['eligible']) {
+                $eligibleCount++;
+            }
+            if (in_array(ActionItemEligibility::OWNER_REQUIRED, $eligibility['blockers'], true)) {
+                $needsOwnerCount++;
+            }
+            if (in_array(ActionItemEligibility::OWNER_AMBIGUOUS, $eligibility['blockers'], true)) {
+                $ambiguousCount++;
+            }
+            if ($task->owner_state === 'unmatched') {
+                $unmatchedCount++;
+            }
+            if ($task->conditional && !$task->conditional_ack) {
+                $conditionalCount++;
+            }
+            if (empty($task->due_date) && !$task->no_deadline_ack) {
+                $missingDeadlineCount++;
+            }
+        }
+
+        return response()->json([
+            'total'            => $tasks->count(),
+            'pending'          => $pending->count(),
+            'eligible'         => $eligibleCount,
+            'needs_owner'      => $needsOwnerCount,
+            'ambiguous_owner'  => $ambiguousCount,
+            'unmatched_owner'  => $unmatchedCount,
+            'conditional'      => $conditionalCount,
+            'missing_deadline' => $missingDeadlineCount,
         ]);
     }
 
@@ -127,6 +238,8 @@ class ReviewController extends Controller
             'due_date' => ['nullable', 'date_format:Y-m-d'],
             'priority' => ['nullable', 'string', 'in:high,medium,low'],
             'conditional' => ['nullable', 'boolean'],
+            'conditional_ack' => ['nullable', 'boolean'],
+            'no_deadline_ack' => ['nullable', 'boolean'],
             'owner_ambiguous' => ['nullable', 'boolean'],
         ]);
 
@@ -157,6 +270,16 @@ class ReviewController extends Controller
             $changes['conditional'] = $task->conditional;
         }
 
+        if ($request->has('conditional_ack')) {
+            $task->conditional_ack = (bool) $validated['conditional_ack'];
+            $changes['conditional_ack'] = $task->conditional_ack;
+        }
+
+        if ($request->has('no_deadline_ack')) {
+            $task->no_deadline_ack = (bool) $validated['no_deadline_ack'];
+            $changes['no_deadline_ack'] = $task->no_deadline_ack;
+        }
+
         // Owner assignment logic
         if ($request->has('owner_id')) {
             $rawOwnerId = $request->input('owner_id');
@@ -170,17 +293,25 @@ class ReviewController extends Controller
                 if ($ownerUser) {
                     $task->owner_id = $ownerUser->id;
                     $task->owner_ambiguous = false;
+                    $task->owner_state = 'resolved';
                     $changes['owner_id'] = $ownerUser->id;
                     $changes['owner_ambiguous'] = false;
+                    $changes['owner_state'] = 'resolved';
                 }
             } else {
                 // If explicitly set to null/empty
                 $task->owner_id = null;
+                $task->owner_state = 'missing';
                 $changes['owner_id'] = null;
+                $changes['owner_state'] = 'missing';
             }
         } elseif ($request->has('owner_ambiguous')) {
             $task->owner_ambiguous = (bool) $validated['owner_ambiguous'];
+            if ($task->owner_ambiguous) {
+                $task->owner_state = 'ambiguous';
+            }
             $changes['owner_ambiguous'] = $task->owner_ambiguous;
+            $changes['owner_state'] = $task->owner_state;
         }
 
         $task->save();
@@ -245,14 +376,16 @@ class ReviewController extends Controller
             ]);
         }
 
-        // Owner required verification
-        if ($task->owner_ambiguous || empty($task->owner_id)) {
-            return ApiResponse::error(
-                'OWNER_REQUIRED',
-                'Cannot approve a task with an unresolved owner.',
-                422,
-                'owner_id'
-            );
+        // Eligibility verification gate
+        $eligibility = ActionItemEligibility::evaluate($task);
+        if (!$eligibility['eligible']) {
+            return response()->json([
+                'error' => [
+                    'code'     => 'VALIDATION_ERROR',
+                    'message'  => 'Task is not eligible for approval.',
+                    'blockers' => $eligibility['blockers'],
+                ],
+            ], 422);
         }
 
         $meetingId = $task->meeting_id;
@@ -368,26 +501,32 @@ class ReviewController extends Controller
             );
         }
 
-        $approvedCount = 0;
-        $skippedCount = 0;
+        $approvedIds = [];
+        $skipped = [];
 
-        DB::transaction(function () use ($meeting, $user, $stateMachine, $webhookService, &$approvedCount, &$skippedCount) {
-            // Find all pending tasks
+        DB::transaction(function () use ($meeting, $user, $stateMachine, $webhookService, &$approvedIds, &$skipped) {
+            // Find all pending tasks with lockForUpdate to prevent race conditions
             $pendingTasks = Task::withoutGlobalScopes()
                 ->where('meeting_id', $meeting->id)
                 ->whereIn('status', [TaskStateMachine::STATUS_PENDING_APPROVAL, TaskStateMachine::STATUS_DETECTED])
+                ->with(['owner'])
+                ->lockForUpdate()
                 ->get();
 
             foreach ($pendingTasks as $task) {
-                // Skip cards missing an owner or marked ambiguous
-                if ($task->owner_ambiguous || empty($task->owner_id)) {
-                    $skippedCount++;
+                $eligibility = ActionItemEligibility::evaluate($task);
+
+                if (!$eligibility['eligible']) {
+                    $skipped[] = [
+                        'id'       => $task->id,
+                        'blockers' => $eligibility['blockers'],
+                    ];
                     continue;
                 }
 
                 // Approve eligible task
                 $stateMachine->approve($task, $user->id, 'user');
-                $approvedCount++;
+                $approvedIds[] = $task->id;
             }
 
             // Check if meeting is fully resolved
@@ -401,11 +540,13 @@ class ReviewController extends Controller
             ->get();
 
         return response()->json([
-            'ok' => true,
-            'approved_count' => $approvedCount,
-            'skipped_count' => $skippedCount,
+            'ok'             => true,
+            'approved'       => $approvedIds,
+            'approved_count' => count($approvedIds),
+            'skipped'        => $skipped,
+            'skipped_count'  => count($skipped),
             'meeting_status' => $meeting->fresh()->status,
-            'tasks' => $allTasks->map(fn (Task $t) => $this->formatTask($t)),
+            'tasks'          => $allTasks->map(fn (Task $t) => $this->formatTask($t)),
         ]);
     }
 
@@ -474,6 +615,7 @@ class ReviewController extends Controller
             'owner_id' => $task->owner_id,
             'owner_name_raw' => $task->owner_name_raw,
             'owner_ambiguous' => (bool) $task->owner_ambiguous,
+            'owner_state' => $task->owner_state ?? ($task->owner_ambiguous ? 'ambiguous' : ($task->owner_id ? 'resolved' : ($task->owner_name_raw ? 'unmatched' : 'missing'))),
             'owner' => $task->owner ? [
                 'id' => $task->owner->id,
                 'name' => $task->owner->name,
@@ -486,8 +628,11 @@ class ReviewController extends Controller
             'status' => $task->status,
             'due_date' => $task->due_date ? Carbon::parse($task->due_date)->format('Y-m-d') : null,
             'deadline_phrase' => $task->deadline_phrase,
+            'no_deadline_ack' => (bool) $task->no_deadline_ack,
             'source_text' => $task->source_text,
             'conditional' => (bool) $task->conditional,
+            'conditional_ack' => (bool) $task->conditional_ack,
+            'eligibility' => ActionItemEligibility::evaluate($task),
             'owner_confidence' => $task->owner_confidence !== null ? (float) $task->owner_confidence : null,
             'deadline_confidence' => $task->deadline_confidence !== null ? (float) $task->deadline_confidence : null,
             'action_confidence' => $task->action_confidence !== null ? (float) $task->action_confidence : null,
