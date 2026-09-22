@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Tasks\TaskMetrics;
+use App\Domain\Tasks\TaskStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Task;
 use App\Models\TaskComment;
@@ -77,10 +79,13 @@ class EmployeeTaskController extends Controller
                 'owner_name' => $t->owner?->name,
             ]);
 
+        $counts = TaskMetrics::forEmployee($user, $today);
+
         return response()->json([
             'overdue'    => $overdue,
             'due_today'  => $dueToday,
             'upcoming'   => $upcoming,
+            'counts'     => $counts,
             'open_tasks' => $openTasks,
         ]);
     }
@@ -318,41 +323,53 @@ class EmployeeTaskController extends Controller
             $today = Carbon::now($orgTz)->startOfDay();
         }
 
-        $dueDate  = $task->due_date ? Carbon::parse($task->due_date) : null;
-        $bucket   = 'upcoming';
+        $isOpen = in_array($task->status, [
+            TaskStatus::Assigned->value,
+            TaskStatus::InProgress->value,
+            TaskStatus::Blocked->value,
+            'overdue',
+            'escalated',
+        ], true);
 
-        if ($dueDate) {
-            if ($dueDate->lt($today)) {
-                $bucket = 'overdue';
-            } elseif ($dueDate->isSameDay($today)) {
-                $bucket = 'due_today';
-            }
+        $dueDate = $task->due_date ? Carbon::parse($task->due_date, $orgTz)->startOfDay() : null;
+        $isOverdue = $isOpen && $dueDate && $dueDate->lt($today);
+        $daysOverdue = $isOverdue ? (int) $today->diffInDays($dueDate) : 0;
+        $daysUntilDue = ($isOpen && $dueDate && $dueDate->gte($today)) ? (int) $today->diffInDays($dueDate) : null;
+
+        $bucket = 'upcoming';
+        if ($isOverdue) {
+            $bucket = 'overdue';
+        } elseif ($isOpen && $dueDate && $dueDate->isSameDay($today)) {
+            $bucket = 'due_today';
         }
 
         $activeBlocker = $task->activeBlocker;
 
         return [
-            'id'             => $task->id,
-            'title'          => $task->title,
-            'description'    => $task->description,
-            'priority'       => $task->priority,
-            'status'         => $task->status,
-            'due_date'       => $dueDate?->format('Y-m-d'),
-            'bucket'         => $bucket,
+            'id'               => $task->id,
+            'title'            => $task->title,
+            'description'      => $task->description,
+            'priority'         => $task->priority,
+            'status'           => $task->status,
+            'due_date'         => $dueDate?->format('Y-m-d'),
+            'bucket'           => $bucket,
+            'is_overdue'       => $isOverdue,
+            'days_overdue'     => $daysOverdue,
+            'days_until_due'   => $daysUntilDue,
             'escalation_level' => (int) $task->escalation_level,
-            'blocker'        => $activeBlocker ? [
+            'blocker'          => $activeBlocker ? [
                 'id'          => $activeBlocker->id,
                 'reason_code' => $activeBlocker->reason_code,
                 'description' => $activeBlocker->description,
             ] : null,
-            'comments'       => ($task->relationLoaded('comments') ? $task->comments : collect())->map(fn($c) => [
+            'comments'         => ($task->relationLoaded('comments') ? $task->comments : collect())->map(fn($c) => [
                 'id'          => $c->id,
                 'body'        => $c->body,
                 'author_name' => $c->author?->name ?? 'Unknown',
                 'created_at'  => $c->created_at?->toIso8601String(),
             ])->values()->all(),
-            'meeting_id'     => $task->meeting_id,
-            'created_at'     => $task->created_at?->toIso8601String(),
+            'meeting_id'       => $task->meeting_id,
+            'created_at'       => $task->created_at?->toIso8601String(),
         ];
     }
 }

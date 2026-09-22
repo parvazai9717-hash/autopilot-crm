@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Tasks\TaskMetrics;
 use App\Http\Controllers\Controller;
 use App\Models\Meeting;
 use App\Models\Organization;
@@ -49,38 +50,13 @@ class ExecutiveDashboardController extends Controller
         $todayUtc = $today->copy()->setTimezone('UTC');
 
         // ---------------------------------------------------------------------
-        // 1. KPI COUNTS
+        // 1. KPI COUNTS (via canonical TaskMetrics)
         // ---------------------------------------------------------------------
-
-        // Base active tasks (assigned, in_progress, blocked, overdue, escalated)
-        $openTasksQuery = Task::withoutGlobalScopes()
-            ->where('org_id', $user->org_id)
-            ->whereNotIn('status', [
-                TaskStateMachine::STATUS_DETECTED,
-                TaskStateMachine::STATUS_PENDING_APPROVAL,
-                TaskStateMachine::STATUS_REJECTED,
-                TaskStateMachine::STATUS_COMPLETED,
-            ]);
-
-        $activeCount = (clone $openTasksQuery)->count();
-
-        // Completed Today: status = completed and completed_at >= today (in org timezone)
-        $completedTodayCount = Task::withoutGlobalScopes()
-            ->where('org_id', $user->org_id)
-            ->where('status', TaskStateMachine::STATUS_COMPLETED)
-            ->where('completed_at', '>=', $todayUtc)
-            ->count();
-
-        // Overdue: open tasks where due_date < today
-        $overdueCount = (clone $openTasksQuery)
-            ->whereNotNull('due_date')
-            ->where('due_date', '<', $todayStr)
-            ->count();
-
-        // Blocked: tasks with status = blocked
-        $blockedCount = (clone $openTasksQuery)
-            ->where('status', TaskStateMachine::STATUS_BLOCKED)
-            ->count();
+        $metrics = TaskMetrics::forOrg($user->org_id, $today);
+        $activeCount         = $metrics['active'];
+        $completedTodayCount = $metrics['completed_today'];
+        $overdueCount        = $metrics['overdue'];
+        $blockedCount        = $metrics['blocked'];
 
         // ---------------------------------------------------------------------
         // 2. AT RISK COMPUTATION (Computed on read, never stored)
@@ -299,6 +275,14 @@ class ExecutiveDashboardController extends Controller
                 'blocked'           => $blockedCount,
                 'at_risk'           => $atRiskCount,
                 'awaiting_approval' => $awaitingApprovalCount,
+                'unassigned_active' => $metrics['unassigned_active'],
+                'no_deadline'       => $metrics['no_deadline'],
+                'due_today'         => $metrics['due_today'],
+                'upcoming'          => $metrics['upcoming'],
+            ],
+            'meta' => [
+                'as_of'       => $metrics['as_of'],
+                'definitions' => $metrics['definitions'],
             ],
             'exceptions' => [
                 'critical_blockers' => $criticalBlockers,

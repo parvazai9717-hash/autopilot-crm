@@ -2,6 +2,8 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Tasks\TaskMetrics;
+use App\Domain\Tasks\TaskStatus;
 use App\Http\Controllers\Controller;
 use App\Models\Task;
 use App\Models\TaskComment;
@@ -68,24 +70,14 @@ class ManagerDashboardController extends Controller
             ->orderBy('id', 'asc')
             ->get();
 
-        // 3. Compute team metrics across all direct reports' tasks
+        // 3. Compute team metrics across all direct reports' tasks via canonical TaskMetrics
+        $metrics = TaskMetrics::forManager($user, $today);
         $totalTasks = $allTeamTasks->count();
         $completedCount = $allTeamTasks->where('status', TaskStateMachine::STATUS_COMPLETED)->count();
-        $blockedCount = $allTeamTasks->where('status', TaskStateMachine::STATUS_BLOCKED)->count();
-        $overdueCount = 0;
-        $upcomingCount = 0;
-
-        foreach ($allTeamTasks as $t) {
-            if ($t->status === TaskStateMachine::STATUS_COMPLETED) {
-                continue;
-            }
-            $dueDate = $t->due_date ? Carbon::parse($t->due_date) : null;
-            if ($dueDate && $dueDate->lt($today)) {
-                $overdueCount++;
-            } else {
-                $upcomingCount++;
-            }
-        }
+        $blockedCount = $metrics['blocked'];
+        $overdueCount = $metrics['overdue'];
+        $upcomingCount = $metrics['upcoming'];
+        $dueTodayCount = $metrics['due_today'];
 
         $completionRate = $totalTasks > 0 ? (int) round(($completedCount / $totalTasks) * 100) : 100;
 
@@ -415,15 +407,24 @@ class ManagerDashboardController extends Controller
             $today = Carbon::now($orgTz)->startOfDay();
         }
 
-        $dueDate = $task->due_date ? Carbon::parse($task->due_date) : null;
-        $bucket = 'upcoming';
+        $isOpen = in_array($task->status, [
+            TaskStatus::Assigned->value,
+            TaskStatus::InProgress->value,
+            TaskStatus::Blocked->value,
+            'overdue',
+            'escalated',
+        ], true);
 
-        if ($dueDate) {
-            if ($dueDate->lt($today)) {
-                $bucket = 'overdue';
-            } elseif ($dueDate->isSameDay($today)) {
-                $bucket = 'due_today';
-            }
+        $dueDate = $task->due_date ? Carbon::parse($task->due_date, $orgTz)->startOfDay() : null;
+        $isOverdue = $isOpen && $dueDate && $dueDate->lt($today);
+        $daysOverdue = $isOverdue ? (int) $today->diffInDays($dueDate) : 0;
+        $daysUntilDue = ($isOpen && $dueDate && $dueDate->gte($today)) ? (int) $today->diffInDays($dueDate) : null;
+
+        $bucket = 'upcoming';
+        if ($isOverdue) {
+            $bucket = 'overdue';
+        } elseif ($isOpen && $dueDate && $dueDate->isSameDay($today)) {
+            $bucket = 'due_today';
         }
 
         $activeBlocker = $task->activeBlocker;
@@ -437,6 +438,9 @@ class ManagerDashboardController extends Controller
             'previous_status'  => $task->previous_status,
             'due_date'         => $dueDate?->format('Y-m-d'),
             'bucket'           => $bucket,
+            'is_overdue'       => $isOverdue,
+            'days_overdue'     => $daysOverdue,
+            'days_until_due'   => $daysUntilDue,
             'escalation_level' => (int) $task->escalation_level,
             'owner'            => $task->owner ? [
                 'id'    => $task->owner->id,

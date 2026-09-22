@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
+use App\Domain\Tasks\TaskPredicates;
 use App\Http\Controllers\Controller;
 use App\Models\Organization;
 use App\Models\Task;
@@ -52,14 +53,9 @@ class TaskController extends Controller
             $status = $request->query('status');
 
             if ($status === 'overdue') {
-                $query->where(function ($q) use ($today) {
-                    $q->where('status', 'overdue')
-                      ->orWhere(function ($sub) use ($today) {
-                          $sub->whereNotIn('status', ['completed', 'rejected'])
-                              ->whereNotNull('due_date')
-                              ->where('due_date', '<', $today->toDateString());
-                      });
-                });
+                TaskPredicates::overdue($query, $today);
+            } elseif ($status === 'open') {
+                TaskPredicates::open($query);
             } else {
                 $query->where('status', $status);
             }
@@ -85,7 +81,8 @@ class TaskController extends Controller
             ->take($perPage)
             ->get();
 
-        $data = $tasks->map(function (Task $task) {
+        $data = $tasks->map(function (Task $task) use ($orgTimezone) {
+            $isOverdue = $task->isOverdue($orgTimezone);
             return [
                 'id' => $task->id,
                 'title' => $task->title,
@@ -98,6 +95,8 @@ class TaskController extends Controller
                 'due_date' => $task->due_date ? Carbon::parse($task->due_date)->format('Y-m-d') : null,
                 'priority' => $task->priority,
                 'status' => $task->status,
+                'is_overdue' => $isOverdue,
+                'days_overdue' => $task->daysOverdue($orgTimezone),
                 'last_reminder_at' => $task->last_reminder_at ? Carbon::parse($task->last_reminder_at)->format('Y-m-d') : null,
                 'escalation_level' => (int) $task->escalation_level,
             ];

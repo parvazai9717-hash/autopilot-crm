@@ -302,7 +302,7 @@ function TeamTaskCard({ task, directReports, onAction }) {
 
   const isBlocked = task.status === 'blocked';
   const isCompleted = task.status === 'completed';
-  const isOverdue = task.bucket === 'overdue';
+  const isOverdue = Boolean(task.is_overdue ?? (task.bucket === 'overdue' && !isCompleted));
 
   async function handleAction(name, fn) {
     setBusyAction(name);
@@ -547,14 +547,16 @@ export const ManagerDashboard = () => {
     if (selectedReportId !== null && task.owner?.id !== selectedReportId) {
       return false;
     }
-    if (statusFilter === 'overdue' && (task.bucket !== 'overdue' || task.status === 'completed')) {
-      return false;
+    if (statusFilter === 'overdue') {
+      const isTaskOverdue = Boolean(task.is_overdue ?? (task.bucket === 'overdue' && task.status !== 'completed'));
+      if (!isTaskOverdue) return false;
     }
     if (statusFilter === 'blocked' && task.status !== 'blocked') {
       return false;
     }
-    if (statusFilter === 'upcoming' && (task.status === 'completed' || task.bucket === 'overdue')) {
-      return false;
+    if (statusFilter === 'upcoming') {
+      const isTaskOverdue = Boolean(task.is_overdue ?? (task.bucket === 'overdue' && task.status !== 'completed'));
+      if (task.status === 'completed' || isTaskOverdue) return false;
     }
     if (statusFilter === 'completed' && task.status !== 'completed') {
       return false;

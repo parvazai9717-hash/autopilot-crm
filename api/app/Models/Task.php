@@ -152,7 +152,7 @@ class Task extends Model
      */
     public function isOverdue(?string $orgTimezone = null): bool
     {
-        if (!$this->due_date || in_array($this->status, ['completed', 'rejected'])) {
+        if (!$this->due_date || in_array($this->status, ['completed', 'rejected', 'detected', 'pending_approval'], true)) {
             return false;
         }
 
@@ -161,5 +161,65 @@ class Task extends Model
         $dueDate = Carbon::parse($this->due_date, $tz)->startOfDay();
 
         return $dueDate->lt($today);
+    }
+
+    public function daysOverdue(?string $orgTimezone = null): int
+    {
+        if (!$this->isOverdue($orgTimezone)) {
+            return 0;
+        }
+
+        $tz = $orgTimezone ?? ($this->organization?->timezone ?? config('app.timezone', 'Asia/Karachi'));
+        $today = Carbon::now($tz)->startOfDay();
+        $dueDate = Carbon::parse($this->due_date, $tz)->startOfDay();
+
+        return (int) $today->diffInDays($dueDate);
+    }
+
+    public function daysUntilDue(?string $orgTimezone = null): ?int
+    {
+        if (!$this->due_date || in_array($this->status, ['completed', 'rejected', 'detected', 'pending_approval'], true)) {
+            return null;
+        }
+
+        $tz = $orgTimezone ?? ($this->organization?->timezone ?? config('app.timezone', 'Asia/Karachi'));
+        $today = Carbon::now($tz)->startOfDay();
+        $dueDate = Carbon::parse($this->due_date, $tz)->startOfDay();
+
+        if ($dueDate->lt($today)) {
+            return 0;
+        }
+
+        return (int) $today->diffInDays($dueDate);
+    }
+
+    public function scopeOpen($query)
+    {
+        return \App\Domain\Tasks\TaskPredicates::open($query);
+    }
+
+    public function scopeOverdue($query, $today)
+    {
+        return \App\Domain\Tasks\TaskPredicates::overdue($query, $today);
+    }
+
+    public function scopeDueToday($query, $today)
+    {
+        return \App\Domain\Tasks\TaskPredicates::dueToday($query, $today);
+    }
+
+    public function scopeUpcoming($query, $today)
+    {
+        return \App\Domain\Tasks\TaskPredicates::upcoming($query, $today);
+    }
+
+    public function scopeNoDeadline($query)
+    {
+        return \App\Domain\Tasks\TaskPredicates::noDeadline($query);
+    }
+
+    public function scopeBlocked($query)
+    {
+        return \App\Domain\Tasks\TaskPredicates::blocked($query);
     }
 }
