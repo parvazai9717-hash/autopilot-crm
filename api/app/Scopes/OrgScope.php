@@ -2,11 +2,14 @@
 
 namespace App\Scopes;
 
+use App\Models\User;
+use App\Services\TenantContext;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Scope;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 class OrgScope implements Scope
 {
@@ -20,15 +23,44 @@ class OrgScope implements Scope
 
     public function apply(Builder $builder, Model $model): void
     {
+        if (TenantContext::isBypassed()) {
+            return;
+        }
+
         $orgId = static::currentOrgId();
 
         if ($orgId !== null) {
             $builder->where($model->getTable() . '.org_id', $orgId);
+            return;
         }
+
+        // Break recursion when resolving user during auth
+        if (static::$resolving) {
+            return;
+        }
+
+        // Special case: During authentication retrieval (e.g. Auth::attempt on User model)
+        // when no user is logged in yet, allow finding the user by email/credentials.
+        if ($model instanceof User && !Auth::check() && !TenantContext::has()) {
+            return;
+        }
+
+        // In artisan CLI commands (e.g. migrations) outside unit tests when no auth context is set
+        if (app()->runningInConsole() && !app()->runningUnitTests() && !Auth::check() && !TenantContext::has()) {
+            return;
+        }
+
+        // Fail closed: no tenant context or authenticated user present
+        Log::warning("OrgScope failed closed on table {$model->getTable()}: No tenant context found.");
+        $builder->whereRaw('1 = 0');
     }
 
     public static function currentOrgId(): ?int
     {
+        if (TenantContext::has()) {
+            return TenantContext::get();
+        }
+
         if (static::$resolved) {
             return static::$orgId;
         }
@@ -42,6 +74,16 @@ class OrgScope implements Scope
         static::$resolving = true;
 
         try {
+            // First check if Auth user is already resolved (e.g. Sanctum, actingAs)
+            if (Auth::check()) {
+                $user = Auth::user();
+                if ($user && isset($user->org_id)) {
+                    static::$orgId = (int) $user->org_id;
+                    static::$resolved = true;
+                    return static::$orgId;
+                }
+            }
+
             $userId = static::authenticatedUserId();
 
             if ($userId === null) {
@@ -78,7 +120,7 @@ class OrgScope implements Scope
         return null;
     }
 
-    // Must be called whenever the authenticated user changes.
+    // Must be called whenever the authenticated user changes or request finishes.
     public static function flush(): void
     {
         static::$orgId = null;

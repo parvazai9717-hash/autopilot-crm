@@ -43,11 +43,13 @@ return Application::configure(basePath: dirname(__DIR__))
             ClearStaleRememberCookie::class,
         ]);
         $middleware->api(append: [
+            \App\Http\Middleware\SetTenantContext::class,
             HandleIdempotency::class,
         ]);
         $middleware->alias([
             'n8n.key' => ValidateN8nApiKey::class,
             'idempotency' => HandleIdempotency::class,
+            'tenant.context' => \App\Http\Middleware\SetTenantContext::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

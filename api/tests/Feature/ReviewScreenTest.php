@@ -37,6 +37,7 @@ class ReviewScreenTest extends TestCase
         $this->employee = User::find(1); // Ahmed Raza
         $this->otherEmployee = User::find(2); // Sarah Khan
 
+        \App\Services\TenantContext::set($this->admin->org_id);
         $this->meeting = Meeting::find(1);
 
         Config::set('autopilot.webhooks.tasks_approved', 'http://localhost:5678/webhook/tasks-approved');

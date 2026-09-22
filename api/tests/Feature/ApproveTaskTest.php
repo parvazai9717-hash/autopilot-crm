@@ -99,7 +99,7 @@ class ApproveTaskTest extends TestCase
             ->assertJsonStructure([
                 'error' => ['code', 'message', 'blockers'],
             ])
-            ->assertJsonPath('error.code', 'VALIDATION_ERROR');
+            ->assertJsonPath('error.code', 'OWNER_REQUIRED');
 
         $this->assertContains('OWNER_REQUIRED', $response->json('error.blockers'));
     }

@@ -21,14 +21,24 @@ class DemoAccountTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected bool $seed = false;
+
     /** @test */
     public function lockdown_demo_command_deactivates_seeded_users(): void
     {
-        $user = User::factory()->create([
-            'email'     => 'admin@test.com',
-            'password'  => Hash::make('password123'),
-            'is_active' => true,
-        ]);
+        $user = User::where('email', 'admin@test.com')->first();
+        if (!$user) {
+            $user = User::factory()->create([
+                'email'     => 'admin@test.com',
+                'password'  => Hash::make('password123'),
+                'is_active' => true,
+            ]);
+        } else {
+            $user->update([
+                'password'  => Hash::make('password123'),
+                'is_active' => true,
+            ]);
+        }
 
         $this->artisan('security:lockdown-demo')
              ->assertSuccessful();
@@ -59,11 +69,19 @@ class DemoAccountTest extends TestCase
     /** @test */
     public function lockdown_demo_dry_run_does_not_modify_database(): void
     {
-        $user = User::factory()->create([
-            'email'     => 'sarah@test.com',
-            'password'  => Hash::make('password123'),
-            'is_active' => true,
-        ]);
+        $user = User::where('email', 'sarah@test.com')->first();
+        if (!$user) {
+            $user = User::factory()->create([
+                'email'     => 'sarah@test.com',
+                'password'  => Hash::make('password123'),
+                'is_active' => true,
+            ]);
+        } else {
+            $user->update([
+                'password'  => Hash::make('password123'),
+                'is_active' => true,
+            ]);
+        }
 
         $this->artisan('security:lockdown-demo --dry-run')->assertSuccessful();
 

@@ -379,10 +379,15 @@ class ReviewController extends Controller
         // Eligibility verification gate
         $eligibility = ActionItemEligibility::evaluate($task);
         if (!$eligibility['eligible']) {
+            $primaryCode = in_array(ActionItemEligibility::OWNER_REQUIRED, $eligibility['blockers'], true)
+                ? 'OWNER_REQUIRED'
+                : (in_array(ActionItemEligibility::OWNER_AMBIGUOUS, $eligibility['blockers'], true) ? 'OWNER_AMBIGUOUS' : 'VALIDATION_ERROR');
+
             return response()->json([
                 'error' => [
-                    'code'     => 'VALIDATION_ERROR',
+                    'code'     => $primaryCode,
                     'message'  => 'Task is not eligible for approval.',
+                    'field'    => $primaryCode === 'OWNER_REQUIRED' ? 'owner_id' : null,
                     'blockers' => $eligibility['blockers'],
                 ],
             ], 422);

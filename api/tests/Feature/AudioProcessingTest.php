@@ -38,7 +38,15 @@ class AudioProcessingTest extends TestCase
             ['id' => 1],
             ['name' => 'Demo Company', 'timezone' => 'Asia/Karachi']
         );
-        $this->user = User::withoutGlobalScopes()->first();
+        $this->user = User::withoutGlobalScopes()->first() ?? User::create([
+            'org_id' => $this->org->id,
+            'name' => 'Audio Admin',
+            'email' => 'audio@demo.com',
+            'password' => bcrypt('secret'),
+            'role' => 'admin',
+            'status' => 'active',
+            'is_active' => true,
+        ]);
 
         Config::set('autopilot.n8n_api_key', $this->apiKey);
         Config::set('autopilot.webhooks.meeting_uploaded', 'http://localhost:5678/webhook/meeting-uploaded');

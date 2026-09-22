@@ -150,3 +150,14 @@ Route::prefix('v1')->middleware(['n8n.key', 'throttle:n8n-api'])->group(function
     // Task events
     Route::post('/task-events', [TaskEventController::class, 'store']);
 });
+
+/*
+|--------------------------------------------------------------------------
+| Internal Automation Routes (Phase 3 — Claim runs, Active Orgs)
+|--------------------------------------------------------------------------
+*/
+Route::prefix('internal/v1')->middleware(['n8n.key'])->group(function () {
+    Route::post('/runs/claim', [App\Http\Controllers\Internal\V1\RunController::class, 'claim']);
+    Route::get('/orgs/active', [App\Http\Controllers\Internal\V1\OrgsController::class, 'active']);
+});
+

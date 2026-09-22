@@ -22,6 +22,10 @@ class Organization extends Model
         'settings' => 'array',
     ];
 
+    protected $attributes = [
+        'settings' => '{}',
+    ];
+
     /**
      * Users belonging to this organization.
      */

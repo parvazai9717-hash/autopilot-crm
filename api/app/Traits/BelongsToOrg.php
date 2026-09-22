@@ -4,6 +4,7 @@ namespace App\Traits;
 
 use App\Models\Organization;
 use App\Scopes\OrgScope;
+use App\Services\TenantContext;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Auth;
 
@@ -17,12 +18,14 @@ trait BelongsToOrg
         static::addGlobalScope(new OrgScope());
 
         static::creating(function ($model) {
-            if (empty($model->org_id)) {
-                if (request()->has('org_id')) {
-                    $model->org_id = (int) request()->query('org_id', request()->input('org_id'));
-                } elseif (Auth::check() && Auth::user()->org_id) {
-                    $model->org_id = Auth::user()->org_id;
-                }
+            $tenantId = TenantContext::get() ?? (Auth::check() ? Auth::user()?->org_id : null);
+
+            // In tenant-scoped contexts, strictly force model org_id to the verified tenant ID.
+            // Never trust caller-supplied request query parameters or request body org_id.
+            if ($tenantId !== null && !TenantContext::isBypassed()) {
+                $model->org_id = $tenantId;
+            } elseif (empty($model->org_id) && $tenantId !== null) {
+                $model->org_id = $tenantId;
             }
         });
     }

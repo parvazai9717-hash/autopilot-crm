@@ -40,6 +40,7 @@ class TaskPredicatesTest extends TestCase
         ]);
 
         $this->today = Carbon::now('Asia/Karachi')->startOfDay();
+        $this->actingAs($this->user);
     }
 
     public function test_open_predicate_includes_only_active_work(): void

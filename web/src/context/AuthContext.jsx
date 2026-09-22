@@ -73,6 +73,8 @@ export const AuthProvider = ({ children }) => {
     } catch (err) {
       console.warn('Logout request failed or already invalidated:', err);
     } finally {
+      localStorage.clear();
+      sessionStorage.clear();
       setUser(null);
     }
   };
