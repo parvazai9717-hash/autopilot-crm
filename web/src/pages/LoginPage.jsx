@@ -3,7 +3,14 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth, getDefaultRouteForRole } from '../context/AuthContext';
 import { Sparkles, Lock, Mail, AlertCircle, Loader2, ArrowRight, UserCheck } from 'lucide-react';
 
-const DEMO_USERS = [
+/**
+ * DEMO_USERS is only included in development builds.
+ * Set VITE_SHOW_DEMO_PANEL=true in .env.local to enable.
+ * Never set this in production — the demo panel must not appear in deployed builds.
+ */
+const SHOW_DEMO_PANEL = import.meta.env.VITE_SHOW_DEMO_PANEL === 'true';
+
+const DEMO_USERS = SHOW_DEMO_PANEL ? [
   {
     role: 'Employee',
     name: 'Ahmed Raza',
@@ -32,15 +39,15 @@ const DEMO_USERS = [
     desc: 'Company KPIs, exception lists',
     badge: 'bg-purple-500/20 text-purple-300 border-purple-500/30',
   },
-];
+] : [];
 
 export const LoginPage = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [email, setEmail] = useState('admin@test.com');
-  const [password, setPassword] = useState('password123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [remember, setRemember] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -68,11 +75,11 @@ export const LoginPage = () => {
     }
   };
 
-  const handleQuickFill = (demoEmail) => {
+  const handleQuickFill = SHOW_DEMO_PANEL ? (demoEmail) => {
     setEmail(demoEmail);
     setPassword('password123');
     setErrorMsg('');
-  };
+  } : undefined;
 
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative overflow-hidden">
@@ -155,7 +162,7 @@ export const LoginPage = () => {
                 />
                 <span>Remember this device</span>
               </label>
-              <span className="text-xs text-indigo-400/80">Demo pwd: password123</span>
+              {/* Forgot password link — Phase 4 */}
             </div>
 
             <button
@@ -177,33 +184,35 @@ export const LoginPage = () => {
             </button>
           </form>
 
-          {/* Quick Demo Credentials */}
-          <div className="mt-6 pt-6 border-t border-slate-800/80">
-            <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 mb-3">
-              <UserCheck className="w-4 h-4 text-indigo-400" />
-              <span>1-Click Demo Login</span>
+          {/* Quick Demo Credentials — only shown when VITE_SHOW_DEMO_PANEL=true */}
+          {SHOW_DEMO_PANEL && DEMO_USERS.length > 0 && (
+            <div className="mt-6 pt-6 border-t border-slate-800/80">
+              <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 mb-3">
+                <UserCheck className="w-4 h-4 text-indigo-400" />
+                <span>1-Click Demo Login</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {DEMO_USERS.map((demo) => (
+                  <button
+                    key={demo.email}
+                    type="button"
+                    onClick={() => handleQuickFill?.(demo.email)}
+                    className={`text-left p-2.5 rounded-xl glass-card-hover border border-slate-800 transition-all ${
+                      email === demo.email ? 'ring-1 ring-indigo-500 bg-indigo-950/30' : ''
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold text-slate-200">{demo.name}</span>
+                      <span className={`text-[10px] px-1.5 py-0.2 rounded font-medium border ${demo.badge}`}>
+                        {demo.role}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 truncate">{demo.email}</div>
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2">
-              {DEMO_USERS.map((demo) => (
-                <button
-                  key={demo.email}
-                  type="button"
-                  onClick={() => handleQuickFill(demo.email)}
-                  className={`text-left p-2.5 rounded-xl glass-card-hover border border-slate-800 transition-all ${
-                    email === demo.email ? 'ring-1 ring-indigo-500 bg-indigo-950/30' : ''
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-semibold text-slate-200">{demo.name}</span>
-                    <span className={`text-[10px] px-1.5 py-0.2 rounded font-medium border ${demo.badge}`}>
-                      {demo.role}
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-slate-400 truncate">{demo.email}</div>
-                </button>
-              ))}
-            </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

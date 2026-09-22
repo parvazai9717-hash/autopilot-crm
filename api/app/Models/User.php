@@ -25,6 +25,7 @@ class User extends Authenticatable
         'role',
         'manager_id',
         'status',
+        'is_active',
     ];
 
     protected $hidden = [
@@ -34,6 +35,7 @@ class User extends Authenticatable
 
     protected $casts = [
         'password' => 'hashed',
+        'is_active' => 'boolean',
     ];
 
     /**
